@@ -5,7 +5,7 @@ Mesh.Smoothing = 100;
 
 lc = Pi / 32.0;
 width = 2*Pi;
-full_height = Pi * 2;
+full_height = Pi;
 layer_count = 4;
 layer_height = full_height / layer_count;
 
@@ -38,8 +38,21 @@ For i In {0 : layer_count-1}
   Physical Surface(i+1) = {i+1};
 EndFor
 
-// bottom boundary gets its own group for source terms
+// each boundary also gets its own group
+// for source terms and energy measurements
 // (named physical groups not currently supported
-// so we just give it a random identifiable number)
+// so we just give them arbitrary identifiable numbers)
+
+// bottom
 Physical Point(990) = {points_l[0], points_r[0]};
 Physical Curve(990) = {lines_hor[0]};
+// top
+Physical Point(991) = {points_l[layer_count], points_r[layer_count]};
+Physical Curve(991) = {lines_hor[layer_count - 1]};
+// right
+Physical Point(992) = {points_r[]};
+Physical Curve(992) = {lines_r[]};
+// left
+Physical Point(993) = {points_l[]};
+Physical Curve(993) = {lines_l[]};
+

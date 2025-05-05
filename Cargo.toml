@@ -3,5 +3,16 @@ name = "phononic"
 version = "0.1.0"
 edition = "2021"
 
+# dexterior from git or path for convenience during development
+[dependencies.dexterior]
+# version = 0.3.0
+features = ["visuals"]
+git = "https://github.com/m0lentum/dexterior.git"
+rev = "01f82a617dc396fd394704642079f64217f2fb1b"
+# path = "../dexterior/crates/dexterior/"
+
 [dependencies]
-dexterior = { version = "0.3.0", features = ["visuals"] }
+clap = { version = "4.5.37", features = ["derive"] }
+facet = "0.18.4"
+facet-pretty = "0.21.0"
+serde = { version = "1.0.219", features = ["derive"] }

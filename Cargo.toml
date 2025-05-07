@@ -13,6 +13,7 @@ rev = "01f82a617dc396fd394704642079f64217f2fb1b"
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }
-facet = "0.18.4"
-facet-pretty = "0.21.0"
-serde = { version = "1.0.219", features = ["derive"] }
+itertools = "0.14.0"
+
+[profile.dev]
+opt-level = 2

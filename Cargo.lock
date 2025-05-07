@@ -571,7 +571,7 @@ version = "0.3.0"
 source = "git+https://github.com/m0lentum/dexterior.git?rev=01f82a617dc396fd394704642079f64217f2fb1b#01f82a617dc396fd394704642079f64217f2fb1b"
 dependencies = [
  "fixedbitset",
- "itertools",
+ "itertools 0.11.0",
  "mshio",
  "nalgebra",
  "nalgebra-sparse",
@@ -591,7 +591,7 @@ dependencies = [
  "enterpolation",
  "futures",
  "glyphon",
- "itertools",
+ "itertools 0.11.0",
  "js-sys",
  "log",
  "nalgebra",
@@ -725,78 +725,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad9cdb4b747e485a12abb0e6566612956c7a1bafa3bdb8d682c5b6d403589e48"
 dependencies = [
  "num-traits",
-]
-
-[[package]]
-name = "facet"
-version = "0.18.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44baf2799931a02719ec5bbd419fb8d328266ee90592cddbb1be108b5583de89"
-dependencies = [
- "facet-core",
- "facet-derive",
- "static_assertions",
-]
-
-[[package]]
-name = "facet-core"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c25d94273d53a60487cd12c621c8ed679afec5a672e99babe469a2b02b092009"
-dependencies = [
- "bitflags 2.9.0",
- "impls",
-]
-
-[[package]]
-name = "facet-derive"
-version = "0.18.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a212813740771e95d2c99bbcfa7bc2bd195b99de66d9742253fec97e30b3ffa5"
-dependencies = [
- "facet-core",
- "facet-derive-emit",
-]
-
-[[package]]
-name = "facet-derive-emit"
-version = "0.20.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "96a11a7f46125e1735a1d0163687f76e5edb3f087c590b6b2dee93a52e0c2a94"
-dependencies = [
- "facet-derive-parse",
- "quote",
-]
-
-[[package]]
-name = "facet-derive-parse"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2deac2f3f82fc1e292225e64ed28137905252d7305342127db9928228915f8c1"
-dependencies = [
- "unsynn",
-]
-
-[[package]]
-name = "facet-pretty"
-version = "0.21.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6127341e3ecd912bc6639c08c4c63e371d1cf2816407dce57483998f2d5cf995"
-dependencies = [
- "facet-core",
- "facet-reflect",
- "yansi",
-]
-
-[[package]]
-name = "facet-reflect"
-version = "0.18.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "90f3193dce90811dfd2b32f35bfb4b13ea0c845bb8baeaad10e15355ec5b375b"
-dependencies = [
- "bitflags 2.9.0",
- "facet-core",
- "owo-colors",
 ]
 
 [[package]]
@@ -1138,12 +1066,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dfa686283ad6dd069f105e5ab091b04c62850d3e4cf5d67debad1933f55023df"
 
 [[package]]
-name = "impls"
-version = "1.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a46645bbd70538861a90d0f26c31537cdf1e44aae99a794fb75a664b70951bc"
-
-[[package]]
 name = "indexmap"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1164,6 +1086,15 @@ name = "itertools"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57"
+dependencies = [
+ "either",
+]
+
+[[package]]
+name = "itertools"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -1368,12 +1299,6 @@ dependencies = [
  "num-traits",
  "thiserror",
 ]
-
-[[package]]
-name = "mutants"
-version = "0.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc0287524726960e07b119cebd01678f852f147742ae0d925e6a520dca956126"
 
 [[package]]
 name = "naga"
@@ -1846,12 +1771,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "owo-colors"
-version = "4.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1036865bb9422d3300cf723f657c2851d0e9ab12567854b1f4eba3d77decf564"
-
-[[package]]
 name = "palette"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1958,9 +1877,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "dexterior",
- "facet",
- "facet-pretty",
- "serde",
+ "itertools 0.14.0",
 ]
 
 [[package]]
@@ -2291,12 +2208,6 @@ dependencies = [
  "quote",
  "syn 2.0.100",
 ]
-
-[[package]]
-name = "shadow_counted"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "65da48d447333cebe1aadbdd3662f3ba56e76e67f53bc46f3dd5f67c74629d6b"
 
 [[package]]
 name = "shlex"
@@ -2660,17 +2571,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unsynn"
-version = "0.0.26"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14013db4ac11f92d4df4b56edb431eab9c1d9f7aee4791f3205b6a1119b83f54"
-dependencies = [
- "mutants",
- "proc-macro2",
- "shadow_counted",
-]
 
 [[package]]
 name = "utf8parse"
@@ -3429,12 +3329,6 @@ name = "xml-rs"
 version = "0.8.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a62ce76d9b56901b19a74f19431b0d8b3bc7ca4ad685a746dfd78ca8f4fc6bda"
-
-[[package]]
-name = "yansi"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfe53a6657fd280eaa890a3bc59152892ffa3e30101319d168b781ed6529b049"
 
 [[package]]
 name = "yazi"

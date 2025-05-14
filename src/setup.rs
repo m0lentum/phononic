@@ -2,6 +2,7 @@
 //! (mesh, operators, ...)
 
 use dexterior as dex;
+use itertools::Itertools;
 
 use super::simulate::{Flux, Pressure, Shear, Velocity};
 
@@ -28,6 +29,8 @@ pub struct Ops {
     pub mu_scaling: dex::DiagonalOperator<Shear, Shear>,
     pub stiffness_scaling: dex::DiagonalOperator<Pressure, Pressure>,
     pub inv_density_scaling: dex::DiagonalOperator<Velocity, Velocity>,
+    // projection matrix that matches the right edge to the left
+    pub periodic_projection: dex::MatrixOperator<Velocity, Velocity>,
 }
 
 pub struct Subsets {
@@ -37,11 +40,12 @@ pub struct Subsets {
     pub boundary_edges: dex::Subset<1, dex::Primal>,
     /// boundaries between layers, not including outer boundary
     pub layer_boundary_edges: dex::Subset<1, dex::Primal>,
-    /// edges along which we measure transmitted,
-    /// reflected, and absorbed energy
-    /// (bottom edges also function as source terms)
+    /// edges along which we measure transmitted and reflected energy
     pub bottom_edges: dex::Subset<1, dex::Primal>,
     pub top_edges: dex::Subset<1, dex::Primal>,
+    // edges along which the domain is periodic
+    pub left_edges: dex::Subset<1, dex::Primal>,
+    pub right_edges: dex::Subset<1, dex::Primal>,
     pub side_edges: dex::Subset<1, dex::Primal>,
 }
 
@@ -121,6 +125,8 @@ impl Setup {
             layer_boundary_edges,
             bottom_edges,
             top_edges,
+            left_edges,
+            right_edges,
             side_edges,
         };
 
@@ -157,23 +163,105 @@ impl Setup {
             l.mu
         });
 
+        // interpolation operator for coupling between the equations
         let interp = dex::interpolate::dual_to_primal(&mesh);
+
+        // projection implementing periodic domain from right to left.
+        // first we need to find which edges match;
+        // existence is guaranteed by the periodic constraint applied with gmsh
+        #[derive(Clone, Copy, Debug)]
+        struct EdgeMatch {
+            // indices of the matching edges
+            left: usize,
+            right: usize,
+            // the relative orientation is needed
+            // to make sure signs match after projection
+            orientation: i8,
+        }
+        let edge_map: Vec<EdgeMatch> = mesh
+            .simplices_in(&subsets.left_edges)
+            .map(|left| {
+                // handling the vertices of a simplex via iterator like this is annoying..
+                // unfortunately the best alternative (arrays instead of iterators)
+                // requires const generic arithmetic which Rust doesn't have yet
+                let ys = {
+                    let mut verts = left.vertices();
+                    [verts.next().unwrap().y, verts.next().unwrap().y]
+                };
+
+                // the y coordinates should be approximately equal on both edges
+                // (maybe even exactly equal? not sure how gmsh does this)
+                // so padding the range slightly and finding the edge on the other side
+                // that fits in this range should do the trick
+                let y_range = (f64::min(ys[0], ys[1]) - 0.001)..(f64::max(ys[0], ys[1]) + 0.001);
+                let right = mesh
+                    .simplices_in(&subsets.right_edges)
+                    .find(|right| right.vertices().all(|v| y_range.contains(&v.y)))
+                    .expect("Periodic mesh edges weren't set up right");
+
+                let first_right = right.vertices().next().unwrap();
+                let orientation = if (ys[0] - first_right.y).abs() < left.volume() / 2. {
+                    // first vertex has same y coordinate => orientations match
+                    // (this seems to be the case every time with gmsh,
+                    // but leaving this in just in case)
+                    1
+                } else {
+                    -1
+                };
+
+                EdgeMatch {
+                    left: left.index(),
+                    right: right.index(),
+                    orientation,
+                }
+            })
+            .collect();
+
+        let edge_count = mesh.simplex_count::<1>();
+        let mut proj_coo = dex::nas::CooMatrix::new(edge_count, edge_count);
+        // identity diagonal
+        for i in 0..edge_count {
+            proj_coo.push(i, i, 1.);
+        }
+        for em in &edge_map {
+            proj_coo.push(em.left, em.right, em.orientation as f64);
+            proj_coo.push(em.right, em.left, em.orientation as f64);
+        }
+        let periodic_projection = dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&proj_coo));
 
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
-            q_step: dt * inv_density_scaling.clone() * mesh.star() * mesh.d(),
+            q_step: dt
+                * periodic_projection.clone()
+                * inv_density_scaling.clone()
+                * mesh.star()
+                * mesh.d(),
             // the interpolated operators have no effect everywhere except at material boundaries
             // (and break at the mesh boundary due to truncated dual cells)
             // so we can safely exclude the rest
-            q_step_interp: (dt * inv_density_scaling.clone() * mesh.d() * interp.clone())
-                .exclude_subset(&mesh.subset_complement(&subsets.layer_boundary_edges)),
+            // (TODO: this isn't actually true, revise this whole idea)
+            q_step_interp: (dt
+                * periodic_projection.clone()
+                * inv_density_scaling.clone()
+                * mesh.d()
+                * interp.clone())
+            .exclude_subset(&mesh.subset_complement(&subsets.layer_boundary_edges)),
             w_step: dt * mu_scaling.clone() * mesh.star() * mesh.d(),
-            v_step: dt * inv_density_scaling.clone() * mesh.star() * mesh.d(),
-            v_step_interp: (dt * inv_density_scaling.clone() * mesh.d() * interp)
+            v_step: dt
+                * periodic_projection.clone()
+                * inv_density_scaling.clone()
+                * mesh.star()
+                * mesh.d(),
+            v_step_interp: (dt
+                * periodic_projection.clone()
+                * inv_density_scaling.clone()
+                * mesh.d()
+                * interp)
                 .exclude_subset(&mesh.subset_complement(&subsets.layer_boundary_edges)),
             inv_density_scaling,
             mu_scaling,
             stiffness_scaling,
+            periodic_projection,
         };
 
         Ok(Self {

@@ -7,9 +7,9 @@ edition = "2021"
 [dependencies.dexterior]
 # version = 0.3.0
 features = ["visuals"]
-# git = "https://github.com/m0lentum/dexterior.git"
-# rev = "01f82a617dc396fd394704642079f64217f2fb1b"
-path = "../dexterior/crates/dexterior/"
+git = "https://github.com/m0lentum/dexterior.git"
+rev = "3829d8f060d2a3a91ef66d8d6435ebaa535c560d"
+# path = "../dexterior/crates/dexterior/"
 
 [dependencies]
 clap = { version = "4.5.37", features = ["derive"] }

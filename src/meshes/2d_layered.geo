@@ -23,6 +23,8 @@ EndFor
 For i In {0 : layer_count-1}
   ll = newl; Line(ll) = {points_l[i], points_l[i+1]};
   lr = newl; Line(lr) = {points_r[i], points_r[i+1]};
+  // periodicity constraint for left and right walls
+  Periodic Line {lr} = {ll} Translate {width, 0, 0};
   lines_l[i] = ll;
   lines_r[i] = lr;
 EndFor
@@ -48,7 +50,7 @@ Physical Point(990) = {points_l[0], points_r[0]};
 Physical Curve(990) = {lines_hor[0]};
 // top
 Physical Point(991) = {points_l[layer_count], points_r[layer_count]};
-Physical Curve(991) = {lines_hor[layer_count - 1]};
+Physical Curve(991) = {lines_hor[layer_count]};
 // right
 Physical Point(992) = {points_r[]};
 Physical Curve(992) = {lines_r[]};

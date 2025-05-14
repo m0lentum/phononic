@@ -60,8 +60,6 @@ pub struct MeasurementData {
     /// Average transmitted energies over time,
     /// used to detect when we've reached a steady state
     pub transmitted_averages: Vec<f64>,
-    /// Energy measured at the side edges
-    pub absorbed: VecDeque<f64>,
 }
 
 /// Final measurements derived from MeasurementData,
@@ -70,15 +68,12 @@ pub struct MeasurementData {
 pub struct Measurements {
     /// Average energy transmitted through the structure over a wave period.
     pub transmitted: f64,
-    /// Average energy absorbed by the sides over a wave period.
-    pub absorbed: f64,
 }
 
 impl From<&MeasurementData> for Measurements {
     fn from(data: &MeasurementData) -> Self {
         Self {
             transmitted: data.transmitted.iter().sum::<f64>() / data.transmitted.len() as f64,
-            absorbed: data.absorbed.iter().sum::<f64>() / data.absorbed.len() as f64,
         }
     }
 }
@@ -168,23 +163,16 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
             dex::quadrature::GaussLegendre6(|p, d| shear_source_vec(p, d, state.t)),
         );
 
-        // absorbing boundary
-        for layer in &setup.subsets.layers {
-            let edges_here = setup
-                .subsets
-                .boundary_edges
-                .intersection(&layer.edges)
-                .difference(&setup.subsets.bottom_edges);
-
-            for edge in setup.mesh.simplices_in(&edges_here) {
-                let length = edge.volume();
-                // pressure from the adjacent dual vertex
-                let (orientation, tri) = edge.coboundary().next().unwrap();
-                state.q[edge] = -state.p[tri.dual()] * length * orientation as f64
-                    / (layer.p_wave_speed * layer.density);
-                state.v[edge] = -state.w[tri.dual()] * length * orientation as f64
-                    / (layer.s_wave_speed * layer.density);
-            }
+        // absorbing boundary at the top
+        let top_layer = setup.subsets.layers.iter().last().unwrap();
+        for edge in setup.mesh.simplices_in(&setup.subsets.top_edges) {
+            let length = edge.volume();
+            // pressure from the adjacent dual vertex
+            let (orientation, tri) = edge.coboundary().next().unwrap();
+            state.q[edge] = -state.p[tri.dual()] * length * orientation as f64
+                / (top_layer.p_wave_speed * top_layer.density);
+            state.v[edge] = -state.w[tri.dual()] * length * orientation as f64
+                / (top_layer.s_wave_speed * top_layer.density);
         }
 
         state.p += &setup.ops.p_step * &state.q;
@@ -208,23 +196,6 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
             state.measurements.transmitted.pop_front();
         }
         state.measurements.transmitted.push_back(transmitted);
-
-        let absorbed: f64 = setup
-            .mesh
-            .simplices_in(&setup.subsets.side_edges)
-            .map(edge_energy)
-            .sum();
-        if state.measurements.absorbed.len() >= timesteps_per_period {
-            state.measurements.absorbed.pop_front();
-        }
-        state.measurements.absorbed.push_back(absorbed);
-
-        let avg_transmitted = state.measurements.transmitted.iter().sum::<f64>()
-            / state.measurements.transmitted.len() as f64;
-        state
-            .measurements
-            .transmitted_averages
-            .push(avg_transmitted);
     };
 
     //
@@ -305,6 +276,20 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                         ..Default::default()
                     });
                 }
+                draw.wireframe_subset(
+                    dv::WireframeParams {
+                        width: dv::LineWidth::ScreenPixels(4.),
+                        color: dv::palette::named::DARKBLUE.into(),
+                    },
+                    &(setup.subsets.top_edges.union(&setup.subsets.bottom_edges)),
+                );
+                draw.wireframe_subset(
+                    dv::WireframeParams {
+                        width: dv::LineWidth::ScreenPixels(4.),
+                        color: dv::palette::named::DARKRED.into(),
+                    },
+                    &setup.subsets.side_edges,
+                );
 
                 if state.draw_arrows {
                     if state.draw_pressure {
@@ -328,10 +313,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
 
                 let measurements = Measurements::from(&state.measurements);
                 draw.text(dv::TextParams {
-                    text: &format!(
-                        "Transmitted: {:.3}\nAbsorbed: {:.3}",
-                        measurements.transmitted, measurements.absorbed
-                    ),
+                    text: &format!("Transmitted: {:.3}", measurements.transmitted),
                     position: dex::Vec2::new(PI, PI),
                     anchor: dv::TextAnchor::BottomLeft,
                     font_size: 24.,

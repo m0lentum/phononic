@@ -558,6 +558,7 @@ dependencies = [
 [[package]]
 name = "dexterior"
 version = "0.3.0"
+source = "git+https://github.com/m0lentum/dexterior.git?rev=3829d8f060d2a3a91ef66d8d6435ebaa535c560d#3829d8f060d2a3a91ef66d8d6435ebaa535c560d"
 dependencies = [
  "dexterior-core",
  "dexterior-visuals",
@@ -567,6 +568,7 @@ dependencies = [
 [[package]]
 name = "dexterior-core"
 version = "0.3.0"
+source = "git+https://github.com/m0lentum/dexterior.git?rev=3829d8f060d2a3a91ef66d8d6435ebaa535c560d#3829d8f060d2a3a91ef66d8d6435ebaa535c560d"
 dependencies = [
  "fixedbitset",
  "itertools 0.11.0",
@@ -579,6 +581,7 @@ dependencies = [
 [[package]]
 name = "dexterior-visuals"
 version = "0.3.0"
+source = "git+https://github.com/m0lentum/dexterior.git?rev=3829d8f060d2a3a91ef66d8d6435ebaa535c560d#3829d8f060d2a3a91ef66d8d6435ebaa535c560d"
 dependencies = [
  "bytemuck",
  "console_error_panic_hook",

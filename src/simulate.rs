@@ -110,22 +110,17 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         t >= start_time
     };
 
-    let pressure_source_vec = |pos: dex::Vec2, dir: dex::UnitVec2, t: f64| -> f64 {
+    let pressure_source = |pos: dex::Vec2, t: f64| -> f64 {
         if !p_pulse_active(pos, t) {
             return 0.;
         }
-        let normal = dex::Vec2::new(dir.y, -dir.x);
-        let vel =
-            -pressure_wave_vector * f64::sin(params.frequency * t - pressure_wave_vector.dot(&pos));
-        vel.dot(&normal)
+        f64::sin(params.frequency * t - pressure_wave_vector.dot(&pos))
     };
-    let shear_source_vec = |pos: dex::Vec2, dir: dex::UnitVec2, t: f64| -> f64 {
+    let shear_source = |pos: dex::Vec2, t: f64| -> f64 {
         if !s_pulse_active(pos, t) {
             return 0.;
         }
-        let normal = dex::Vec2::new(dir.y, -dir.x);
-        let vel = -shear_wave_vector * f64::sin(params.frequency * t - shear_wave_vector.dot(&pos));
-        vel.dot(&normal)
+        f64::sin(params.frequency * t - shear_wave_vector.dot(&pos))
     };
 
     //
@@ -148,20 +143,15 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
     // step function separated from animation
     // so we can choose between computing with or without visuals
     let step = |state: &mut State| {
-        state.q += &setup.ops.q_step * &state.p + &setup.ops.q_step_interp * &state.w;
-        state.v += &setup.ops.v_step * &state.w + &setup.ops.v_step_interp * &state.p;
+        // sources applied to pressure and shear at the bottom layer
+        for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
+            state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
+            state.w[tri.dual()] = shear_source(tri.circumcenter(), state.t);
+        }
 
-        // sources applied to the flux and velocity vectors
-        setup.mesh.integrate_overwrite(
-            &mut state.q,
-            &setup.subsets.bottom_edges,
-            dex::quadrature::GaussLegendre6(|p, d| pressure_source_vec(p, d, state.t)),
-        );
-        setup.mesh.integrate_overwrite(
-            &mut state.v,
-            &setup.subsets.bottom_edges,
-            dex::quadrature::GaussLegendre6(|p, d| shear_source_vec(p, d, state.t)),
-        );
+        // TODO: fix instability caused by the interpolated coupling
+        state.q += &setup.ops.q_step * &state.p; // + &setup.ops.q_step_interp * &state.w;
+        state.v += &setup.ops.v_step * &state.w; // + &setup.ops.v_step_interp * &state.p;
 
         // absorbing boundary at the top
         let top_layer = setup.subsets.layers.iter().last().unwrap();
@@ -235,7 +225,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         .run_animation(dv::Animation {
             mesh: &setup.mesh,
             params: dv::AnimationParams {
-                color_map_range: Some(-2.0..2.0),
+                color_map_range: Some(-1.0..1.0),
                 ..Default::default()
             },
             dt: setup.dt,
@@ -278,10 +268,10 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 }
                 draw.wireframe_subset(
                     dv::WireframeParams {
-                        width: dv::LineWidth::ScreenPixels(4.),
+                        width: dv::LineWidth::ScreenPixels(2.),
                         color: dv::palette::named::DARKBLUE.into(),
                     },
-                    &(setup.subsets.top_edges.union(&setup.subsets.bottom_edges)),
+                    &(setup.subsets.top_edges.union(&setup.subsets.source_edges)),
                 );
                 draw.wireframe_subset(
                     dv::WireframeParams {

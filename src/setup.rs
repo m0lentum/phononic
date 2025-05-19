@@ -2,7 +2,6 @@
 //! (mesh, operators, ...)
 
 use dexterior as dex;
-use itertools::Itertools;
 
 use super::simulate::{Flux, Pressure, Shear, Velocity};
 
@@ -40,8 +39,10 @@ pub struct Subsets {
     pub boundary_edges: dex::Subset<1, dex::Primal>,
     /// boundaries between layers, not including outer boundary
     pub layer_boundary_edges: dex::Subset<1, dex::Primal>,
-    /// edges along which we measure transmitted and reflected energy
     pub bottom_edges: dex::Subset<1, dex::Primal>,
+    /// region where source terms are applied
+    pub source_tris: dex::Subset<2, dex::Primal>,
+    pub source_edges: dex::Subset<1, dex::Primal>,
     pub top_edges: dex::Subset<1, dex::Primal>,
     // edges along which the domain is periodic
     pub left_edges: dex::Subset<1, dex::Primal>,
@@ -108,6 +109,7 @@ impl Setup {
 
         let boundary_edges = mesh.boundary::<1>();
         let bottom_edges = mesh.get_subset::<1>("990").expect("Subset not found");
+        let bottom_verts = mesh.get_subset::<0>("990").expect("Subset not found");
         let top_edges = mesh.get_subset::<1>("991").expect("Subset not found");
         let right_edges = mesh.get_subset::<1>("992").expect("Subset not found");
         let left_edges = mesh.get_subset::<1>("993").expect("Subset not found");
@@ -119,6 +121,16 @@ impl Setup {
         }
         layer_boundary_edges = layer_boundary_edges.difference(&boundary_edges);
 
+        // source terms are applied over a band of triangles along the bottom
+        let source_tris = dex::Subset::from_predicate(&mesh, |tri| {
+            tri.vertex_indices()
+                .any(|idx| bottom_verts.indices.contains(idx))
+        });
+        let source_edges = dex::Subset::from_simplex_iter(
+            mesh.simplices_in(&source_tris)
+                .flat_map(|tri| tri.boundary().map(|(_, e)| e)),
+        );
+
         let subsets = Subsets {
             layers,
             boundary_edges,
@@ -128,6 +140,8 @@ impl Setup {
             left_edges,
             right_edges,
             side_edges,
+            source_tris,
+            source_edges,
         };
 
         // other constant parameters
@@ -231,11 +245,12 @@ impl Setup {
 
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
-            q_step: dt
+            q_step: (dt
                 * periodic_projection.clone()
                 * inv_density_scaling.clone()
                 * mesh.star()
-                * mesh.d(),
+                * mesh.d())
+            .exclude_subset(&subsets.top_edges),
             // the interpolated operators have no effect everywhere except at material boundaries
             // (and break at the mesh boundary due to truncated dual cells)
             // so we can safely exclude the rest

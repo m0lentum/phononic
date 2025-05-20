@@ -2,6 +2,7 @@
 //! (mesh, operators, ...)
 
 use dexterior as dex;
+use itertools::izip;
 
 use super::simulate::{Flux, Pressure, Shear, Velocity};
 
@@ -30,6 +31,8 @@ pub struct Ops {
     pub inv_density_scaling: dex::DiagonalOperator<Velocity, Velocity>,
     // projection matrix that matches the right edge to the left
     pub periodic_projection: dex::MatrixOperator<Velocity, Velocity>,
+    // interpolation operator that accounts for the periodic boundary condition
+    pub periodic_interp: dex::MatrixOperator<Pressure, dex::Cochain<0, dex::Primal>>,
 }
 
 pub struct Subsets {
@@ -46,7 +49,9 @@ pub struct Subsets {
     pub top_edges: dex::Subset<1, dex::Primal>,
     // edges along which the domain is periodic
     pub left_edges: dex::Subset<1, dex::Primal>,
+    pub left_verts: dex::Subset<0, dex::Primal>,
     pub right_edges: dex::Subset<1, dex::Primal>,
+    pub right_verts: dex::Subset<0, dex::Primal>,
     pub side_edges: dex::Subset<1, dex::Primal>,
 }
 
@@ -112,7 +117,15 @@ impl Setup {
         let bottom_verts = mesh.get_subset::<0>("990").expect("Subset not found");
         let top_edges = mesh.get_subset::<1>("991").expect("Subset not found");
         let right_edges = mesh.get_subset::<1>("992").expect("Subset not found");
+        let right_verts = dex::Subset::from_simplex_iter(
+            mesh.simplices_in(&right_edges)
+                .flat_map(|e| e.boundary().map(|(_, v)| v)),
+        );
         let left_edges = mesh.get_subset::<1>("993").expect("Subset not found");
+        let left_verts = dex::Subset::from_simplex_iter(
+            mesh.simplices_in(&left_edges)
+                .flat_map(|e| e.boundary().map(|(_, v)| v)),
+        );
         let side_edges = right_edges.union(&left_edges);
 
         let mut layer_boundary_edges = layers[0].boundary.clone();
@@ -138,7 +151,9 @@ impl Setup {
             bottom_edges,
             top_edges,
             left_edges,
+            left_verts,
             right_edges,
+            right_verts,
             side_edges,
             source_tris,
             source_edges,
@@ -177,12 +192,26 @@ impl Setup {
             l.mu
         });
 
-        // interpolation operator for coupling between the equations
-        let interp = dex::interpolate::dual_to_primal(&mesh);
-
         // projection implementing periodic domain from right to left.
         // first we need to find which edges match;
-        // existence is guaranteed by the periodic constraint applied with gmsh
+        // existence is guaranteed by the periodic constraint applied with gmsh.
+        // we first find matching vertices (also needed for adjusting the interpolation operator)
+        // and then derive matching edges from these
+        let vertex_map: Vec<(usize, usize)> = mesh
+            .simplices_in(&subsets.left_verts)
+            .map(|left| {
+                let left_y = left.vertices().next().unwrap().y;
+                let right = mesh
+                    .simplices_in(&subsets.right_verts)
+                    .find(|right| {
+                        let right_y = right.vertices().next().unwrap().y;
+                        (left_y - right_y).abs() < 1e-6
+                    })
+                    .expect("Periodic mesh edges weren't set up right");
+                (left.index(), right.index())
+            })
+            .collect();
+
         #[derive(Clone, Copy, Debug)]
         struct EdgeMatch {
             // indices of the matching edges
@@ -198,26 +227,27 @@ impl Setup {
                 // handling the vertices of a simplex via iterator like this is annoying..
                 // unfortunately the best alternative (arrays instead of iterators)
                 // requires const generic arithmetic which Rust doesn't have yet
-                let ys = {
-                    let mut verts = left.vertices();
-                    [verts.next().unwrap().y, verts.next().unwrap().y]
+                let left_indices = {
+                    let mut indices = left.vertex_indices();
+                    [indices.next().unwrap(), indices.next().unwrap()]
                 };
 
-                // the y coordinates should be approximately equal on both edges
-                // (maybe even exactly equal? not sure how gmsh does this)
-                // so padding the range slightly and finding the edge on the other side
-                // that fits in this range should do the trick
-                let y_range = (f64::min(ys[0], ys[1]) - 0.001)..(f64::max(ys[0], ys[1]) + 0.001);
+                let right_indices = left_indices.map(|li| {
+                    vertex_map
+                        .iter()
+                        .find(|(l, _)| *l == li)
+                        .map(|(_, r)| *r)
+                        .unwrap()
+                });
+
                 let right = mesh
                     .simplices_in(&subsets.right_edges)
-                    .find(|right| right.vertices().all(|v| y_range.contains(&v.y)))
-                    .expect("Periodic mesh edges weren't set up right");
+                    .find(|e| e.vertex_indices().all(|i| right_indices.contains(&i)))
+                    .unwrap();
 
-                let first_right = right.vertices().next().unwrap();
-                let orientation = if (ys[0] - first_right.y).abs() < left.volume() / 2. {
-                    // first vertex has same y coordinate => orientations match
-                    // (this seems to be the case every time with gmsh,
-                    // but leaving this in just in case)
+                // whether or not vertices are in the same order on both sides
+                // tells us the relative orientation
+                let orientation = if right.vertex_indices().next().unwrap() == right_indices[0] {
                     1
                 } else {
                     -1
@@ -243,6 +273,53 @@ impl Setup {
         }
         let periodic_projection = dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&proj_coo));
 
+        // interpolation operator with correction at the periodic edges
+        // based on the fact that exactly half
+        // of the dual volume is on the other side
+        // (gmsh keeps triangle shapes consistent)
+        let interp = dex::interpolate::dual_to_primal(&mesh);
+
+        let vert_count = mesh.simplex_count::<0>();
+        let dual_vert_count = mesh.simplex_count::<2>();
+        // values that will be added to the interpolation matrix
+        // coming from dual volumes on the opposite edge
+        // (these modify the sparsity pattern
+        // so we can't easily do this in place on the original matrix)
+        let mut projected_coefs = dex::nas::CooMatrix::new(vert_count, dual_vert_count);
+        for &(l, r) in &vertex_map {
+            // here we apply the weights of dual vertices on the right
+            // to the vertices on the left edge
+            let r_coef_row = interp.mat.row(r);
+            for (r_idx, r_val) in izip!(r_coef_row.col_indices(), r_coef_row.values()) {
+                projected_coefs.push(l, *r_idx, *r_val);
+            }
+            // ..and vice versa
+            let l_coef_row = interp.mat.row(l);
+            for (l_idx, l_val) in izip!(l_coef_row.col_indices(), l_coef_row.values()) {
+                projected_coefs.push(r, *l_idx, *l_val);
+            }
+        }
+        let projected_coefs = dex::nas::CsrMatrix::from(&projected_coefs);
+        let periodic_interp: dex::MatrixOperator<
+            dex::Cochain<0, dex::Dual>,
+            dex::Cochain<0, dex::Primal>,
+        > = dex::MatrixOperator::from(interp.mat + projected_coefs);
+
+        // the previous modification creates doubled weights,
+        // correct these with a diagonal matrix
+        let mut weight_correction = dex::na::DVector::from_vec(vec![1.; mesh.simplex_count::<0>()]);
+        for vert in mesh
+            .simplices_in(&subsets.left_verts)
+            .chain(mesh.simplices_in(&subsets.right_verts))
+        {
+            weight_correction[vert.index()] = 0.5;
+        }
+        type Interpolated = dex::Cochain<0, dex::Primal>;
+        let weight_correction: dex::DiagonalOperator<Interpolated, Interpolated> =
+            dex::DiagonalOperator::from(weight_correction);
+
+        let periodic_interp = weight_correction * periodic_interp;
+
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
             q_step: (dt
@@ -255,28 +332,19 @@ impl Setup {
             // (and break at the mesh boundary due to truncated dual cells)
             // so we can safely exclude the rest
             // (TODO: this isn't actually true, revise this whole idea)
-            q_step_interp: (dt
-                * periodic_projection.clone()
-                * inv_density_scaling.clone()
-                * mesh.d()
-                * interp.clone())
-            .exclude_subset(&mesh.subset_complement(&subsets.layer_boundary_edges)),
+            q_step_interp: (dt * inv_density_scaling.clone() * mesh.d() * periodic_interp.clone()),
             w_step: dt * mu_scaling.clone() * mesh.star() * mesh.d(),
             v_step: dt
                 * periodic_projection.clone()
                 * inv_density_scaling.clone()
                 * mesh.star()
                 * mesh.d(),
-            v_step_interp: (dt
-                * periodic_projection.clone()
-                * inv_density_scaling.clone()
-                * mesh.d()
-                * interp)
-                .exclude_subset(&mesh.subset_complement(&subsets.layer_boundary_edges)),
+            v_step_interp: (dt * inv_density_scaling.clone() * mesh.d() * periodic_interp.clone()),
             inv_density_scaling,
             mu_scaling,
             stiffness_scaling,
             periodic_projection,
+            periodic_interp,
         };
 
         Ok(Self {

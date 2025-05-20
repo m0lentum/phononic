@@ -143,15 +143,9 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
     // step function separated from animation
     // so we can choose between computing with or without visuals
     let step = |state: &mut State| {
-        // sources applied to pressure and shear at the bottom layer
-        for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
-            state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
-            state.w[tri.dual()] = shear_source(tri.circumcenter(), state.t);
-        }
-
         // TODO: fix instability caused by the interpolated coupling
-        state.q += &setup.ops.q_step * &state.p; // + &setup.ops.q_step_interp * &state.w;
-        state.v += &setup.ops.v_step * &state.w; // + &setup.ops.v_step_interp * &state.p;
+        state.q += &setup.ops.q_step * &state.p + &setup.ops.q_step_interp * &state.w;
+        state.v += &setup.ops.v_step * &state.w + &setup.ops.v_step_interp * &state.p;
 
         // absorbing boundary at the top
         let top_layer = setup.subsets.layers.iter().last().unwrap();
@@ -167,8 +161,13 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
 
         state.p += &setup.ops.p_step * &state.q;
         state.w += &setup.ops.w_step * &state.v;
-
         state.t += setup.dt;
+
+        // sources applied to pressure and shear at the bottom layer
+        for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
+            state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
+            state.w[tri.dual()] = shear_source(tri.circumcenter(), state.t);
+        }
 
         // measurements
 

@@ -32,6 +32,10 @@ pub struct SimParams {
     pub frequency: f64,
     /// Whether to visualize the simulation.
     pub visualize: bool,
+    /// Whether or not to apply interpolated coupling
+    /// between shear and pressure waves.
+    /// This is mainly for debugging since it doesn't currently work quite right.
+    pub coupled: bool,
 }
 
 /// Varying state within a single simulation.
@@ -143,9 +147,13 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
     // step function separated from animation
     // so we can choose between computing with or without visuals
     let step = |state: &mut State| {
+        state.q += &setup.ops.q_step * &state.p;
+        state.v += &setup.ops.v_step * &state.w;
         // TODO: fix instability caused by the interpolated coupling
-        state.q += &setup.ops.q_step * &state.p + &setup.ops.q_step_interp * &state.w;
-        state.v += &setup.ops.v_step * &state.w + &setup.ops.v_step_interp * &state.p;
+        if params.coupled {
+            state.q += &setup.ops.q_step_interp * &state.w;
+            state.v += &setup.ops.v_step_interp * &state.p;
+        }
 
         // absorbing boundary at the top
         let top_layer = setup.subsets.layers.iter().last().unwrap();
@@ -171,20 +179,28 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
 
         // measurements
 
-        // since density_scaling contains inverses of density,
-        // the division here multiplies by local density
-        let edge_energy =
-            |e| 0.5 * (state.v[e].powi(2) + state.q[e].powi(2)) / setup.ops.inv_density_scaling[e];
+        // division by density is to cancel these variables' values being scaled by density
+        let pressure_pot_energy = |dv| {
+            0.5 * top_layer.stiffness * state.p[dv].powi(2) * dv.dual().volume() / top_layer.density
+        };
+        let shear_pot_energy =
+            |dv| 0.5 * top_layer.mu * state.w[dv].powi(2) * dv.dual().volume() / top_layer.density;
 
-        let transmitted: f64 = setup
+        let transmitted_pressure_pot: f64 = setup
             .mesh
-            .simplices_in(&setup.subsets.top_edges)
-            .map(edge_energy)
+            .simplices_in(&setup.subsets.measurement_tris)
+            .map(|t| pressure_pot_energy(t.dual()))
             .sum();
+        let transmitted_shear_pot: f64 = setup
+            .mesh
+            .simplices_in(&setup.subsets.measurement_tris)
+            .map(|t| shear_pot_energy(t.dual()))
+            .sum();
+        let transmitted_total = transmitted_pressure_pot + transmitted_shear_pot;
         if state.measurements.transmitted.len() >= timesteps_per_period {
             state.measurements.transmitted.pop_front();
         }
-        state.measurements.transmitted.push_back(transmitted);
+        state.measurements.transmitted.push_back(transmitted_total);
     };
 
     //
@@ -270,7 +286,10 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                         width: dv::LineWidth::ScreenPixels(2.),
                         color: dv::palette::named::DARKBLUE.into(),
                     },
-                    &(setup.subsets.top_edges.union(&setup.subsets.source_edges)),
+                    &(setup
+                        .subsets
+                        .measurement_edges
+                        .union(&setup.subsets.source_edges)),
                 );
                 draw.wireframe_subset(
                     dv::WireframeParams {

@@ -36,6 +36,9 @@ enum Command {
         /// Number of simulations to run with different frequency parameters.
         #[arg(long, default_value_t = 4)]
         freq_resolution: usize,
+        /// Disable interpolated coupling between shear and pressure waves.
+        #[arg(long)]
+        uncoupled: bool,
     },
     /// Run only one simulation and visualize it.
     Visualize {
@@ -45,6 +48,9 @@ enum Command {
         /// Frequency of the wave in radians per second.
         #[arg(long, default_value_t = 2.0)]
         frequency: f64,
+        /// Disable interpolated coupling between shear and pressure waves.
+        #[arg(long)]
+        uncoupled: bool,
     },
 }
 
@@ -60,6 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             freq_min,
             freq_max,
             freq_resolution,
+            uncoupled,
         } => {
             println!(
                 "Running {} simulations on {} threads",
@@ -79,6 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             angle,
                             frequency,
                             visualize: false,
+                            coupled: !uncoupled,
                         }
                     })
                     .collect();
@@ -89,11 +97,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dbg!(measurements);
             });
         }
-        Command::Visualize { angle, frequency } => {
+        Command::Visualize {
+            angle,
+            frequency,
+            uncoupled,
+        } => {
             let params = SimParams {
                 angle: angle * TAU / 360.,
                 frequency,
                 visualize: true,
+                coupled: !uncoupled,
             };
             simulate(params, &setup);
         }

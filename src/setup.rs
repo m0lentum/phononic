@@ -46,6 +46,8 @@ pub struct Subsets {
     /// region where source terms are applied
     pub source_tris: dex::Subset<2, dex::Primal>,
     pub source_edges: dex::Subset<1, dex::Primal>,
+    pub measurement_tris: dex::Subset<2, dex::Primal>,
+    pub measurement_edges: dex::Subset<1, dex::Primal>,
     pub top_edges: dex::Subset<1, dex::Primal>,
     // edges along which the domain is periodic
     pub left_edges: dex::Subset<1, dex::Primal>,
@@ -116,6 +118,7 @@ impl Setup {
         let bottom_edges = mesh.get_subset::<1>("990").expect("Subset not found");
         let bottom_verts = mesh.get_subset::<0>("990").expect("Subset not found");
         let top_edges = mesh.get_subset::<1>("991").expect("Subset not found");
+        let top_verts = mesh.get_subset::<0>("991").expect("Subset not found");
         let right_edges = mesh.get_subset::<1>("992").expect("Subset not found");
         let right_verts = dex::Subset::from_simplex_iter(
             mesh.simplices_in(&right_edges)
@@ -135,12 +138,21 @@ impl Setup {
         layer_boundary_edges = layer_boundary_edges.difference(&boundary_edges);
 
         // source terms are applied over a band of triangles along the bottom
+        // and measurements performed along a similar band at the top
         let source_tris = dex::Subset::from_predicate(&mesh, |tri| {
             tri.vertex_indices()
                 .any(|idx| bottom_verts.indices.contains(idx))
         });
         let source_edges = dex::Subset::from_simplex_iter(
             mesh.simplices_in(&source_tris)
+                .flat_map(|tri| tri.boundary().map(|(_, e)| e)),
+        );
+        let measurement_tris = dex::Subset::from_predicate(&mesh, |tri| {
+            tri.vertex_indices()
+                .any(|idx| top_verts.indices.contains(idx))
+        });
+        let measurement_edges = dex::Subset::from_simplex_iter(
+            mesh.simplices_in(&measurement_tris)
                 .flat_map(|tri| tri.boundary().map(|(_, e)| e)),
         );
 
@@ -157,6 +169,8 @@ impl Setup {
             side_edges,
             source_tris,
             source_edges,
+            measurement_tris,
+            measurement_edges,
         };
 
         // other constant parameters

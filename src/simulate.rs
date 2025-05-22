@@ -274,7 +274,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                     let lambda = layer.stiffness - 2. * layer.mu;
                     draw.text(dv::TextParams {
                         text: &format!("λ: {}\nμ: {}\nρ: {}", lambda, layer.mu, layer.density),
-                        position: dex::Vec2::new(TAU + 0.1, (idx as f64 + 0.5) * layer_height),
+                        position: dex::Vec2::new(PI + 0.1, (idx as f64 + 0.5) * layer_height),
                         anchor: dv::TextAnchor::MidLeft,
                         font_size: 20.,
                         line_height: 24.,
@@ -322,7 +322,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 let measurements = Measurements::from(&state.measurements);
                 draw.text(dv::TextParams {
                     text: &format!("Transmitted: {:.3}", measurements.transmitted),
-                    position: dex::Vec2::new(PI, PI),
+                    position: dex::Vec2::new(PI / 2., PI),
                     anchor: dv::TextAnchor::BottomLeft,
                     font_size: 24.,
                     ..Default::default()

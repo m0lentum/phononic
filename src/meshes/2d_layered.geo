@@ -4,7 +4,7 @@ Mesh.SaveAll = 1;
 Mesh.Smoothing = 100;
 
 lc = Pi / 32.0;
-width = 2*Pi;
+width = Pi;
 full_height = Pi;
 layer_count = 4;
 layer_height = full_height / layer_count;

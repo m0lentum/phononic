@@ -16,12 +16,14 @@ pub struct Setup {
 
 pub struct Ops {
     pub p_step: dex::Op<Flux, Pressure>,
+    pub p_step_interp: dex::Op<Velocity, Pressure>,
     pub q_step: dex::Op<Pressure, Flux>,
     // operators that apply pressure interpolated onto primal vertices
     // into the shear wave and shear into the pressure wave.
     // these only have an effect at material boundaries
     pub q_step_interp: dex::Op<Shear, Flux>,
     pub w_step: dex::Op<Velocity, Shear>,
+    pub w_step_interp: dex::Op<Velocity, Shear>,
     pub v_step: dex::Op<Shear, Velocity>,
     pub v_step_interp: dex::Op<Pressure, Velocity>,
     // material scaling operators
@@ -30,9 +32,14 @@ pub struct Ops {
     pub stiffness_scaling: dex::DiagonalOperator<Pressure, Pressure>,
     pub inv_density_scaling: dex::DiagonalOperator<Velocity, Velocity>,
     // projection matrix that matches the right edge to the left
-    pub periodic_projection: dex::MatrixOperator<Velocity, Velocity>,
+    pub periodic_proj_edge: dex::MatrixOperator<Velocity, Velocity>,
+    pub periodic_proj_vert:
+        dex::MatrixOperator<dex::Cochain<0, dex::Primal>, dex::Cochain<0, dex::Primal>>,
     // interpolation operator that accounts for the periodic boundary condition
-    pub periodic_interp: dex::MatrixOperator<Pressure, dex::Cochain<0, dex::Primal>>,
+    pub periodic_interp_dtp: dex::MatrixOperator<Pressure, dex::Cochain<0, dex::Primal>>,
+    pub periodic_star_0_inv:
+        dex::DiagonalOperator<dex::Cochain<2, dex::Dual>, dex::Cochain<0, dex::Primal>>,
+    pub interp_ptd: dex::MatrixOperator<dex::Cochain<0, dex::Primal>, Pressure>,
 }
 
 pub struct Subsets {
@@ -42,6 +49,11 @@ pub struct Subsets {
     pub boundary_edges: dex::Subset<1, dex::Primal>,
     /// boundaries between layers, not including outer boundary
     pub layer_boundary_edges: dex::Subset<1, dex::Primal>,
+    /// edges and dual vertices of the triangles adjacent to layer boundaries.
+    /// interpolated coupling operators are only applied here,
+    /// as elsewhere they give approximately zero but with some error
+    pub layer_boundary_adjacent_edges: dex::Subset<1, dex::Primal>,
+    pub layer_boundary_adjacent_dvs: dex::Subset<0, dex::Dual>,
     pub bottom_edges: dex::Subset<1, dex::Primal>,
     /// region where source terms are applied
     pub source_tris: dex::Subset<2, dex::Primal>,
@@ -91,7 +103,7 @@ impl Setup {
                 break;
             };
 
-            let boundary = mesh.subset_boundary(&tris);
+            let boundary = tris.manifold_boundary(&mesh);
 
             let lambda = 1.;
             let mu = 1.;
@@ -136,6 +148,19 @@ impl Setup {
             layer_boundary_edges = layer_boundary_edges.union(&layer.boundary);
         }
         layer_boundary_edges = layer_boundary_edges.difference(&boundary_edges);
+        let layer_boundary_verts = dex::Subset::from_simplex_iter(
+            mesh.simplices_in(&layer_boundary_edges)
+                .flat_map(|e| e.boundary().map(|(_, v)| v)),
+        );
+        let layer_boundary_adjacent_dvs = dex::Subset::from_predicate_dual(&mesh, |dv| {
+            dv.dual()
+                .vertex_indices()
+                .any(|vi| layer_boundary_verts.indices.contains(vi))
+        });
+        let layer_boundary_adjacent_edges = dex::Subset::from_simplex_iter(
+            mesh.dual_cells_in(&layer_boundary_adjacent_dvs)
+                .flat_map(|dv| dv.dual().boundary().map(|(_, e)| e)),
+        );
 
         // source terms are applied over a band of triangles along the bottom
         // and measurements performed along a similar band at the top
@@ -160,6 +185,8 @@ impl Setup {
             layers,
             boundary_edges,
             layer_boundary_edges,
+            layer_boundary_adjacent_edges,
+            layer_boundary_adjacent_dvs,
             bottom_edges,
             top_edges,
             left_edges,
@@ -193,9 +220,22 @@ impl Setup {
                 .unwrap();
             l.stiffness
         });
-        let inv_density_scaling = mesh.scaling(|s| {
-            let l = subsets.layers.iter().find(|l| l.edges.contains(s)).unwrap();
-            1. / l.density
+        let inv_density_scaling = mesh.scaling(|edge| {
+            // for density scaling we must account for dual edges
+            // that straddle the line between layers.
+            // take the average density
+            // weighted by portion of dual length in that layer
+            let mut dens_sum = 0.;
+            for (_, tri) in edge.coboundary() {
+                let layer = subsets
+                    .layers
+                    .iter()
+                    .find(|l| l.tris.contains(tri))
+                    .unwrap();
+                let dual_vol = (edge.circumcenter() - tri.circumcenter()).magnitude();
+                dens_sum += dual_vol * layer.density;
+            }
+            1. / (dens_sum / edge.dual_volume())
         });
         let mu_scaling = mesh.scaling_dual(|s| {
             let l = subsets
@@ -276,22 +316,37 @@ impl Setup {
             .collect();
 
         let edge_count = mesh.simplex_count::<1>();
-        let mut proj_coo = dex::nas::CooMatrix::new(edge_count, edge_count);
+        let mut edge_proj_coo = dex::nas::CooMatrix::new(edge_count, edge_count);
         // identity diagonal
         for i in 0..edge_count {
-            proj_coo.push(i, i, 1.);
+            edge_proj_coo.push(i, i, 1.);
         }
         for em in &edge_map {
-            proj_coo.push(em.left, em.right, em.orientation as f64);
-            proj_coo.push(em.right, em.left, em.orientation as f64);
+            edge_proj_coo.push(em.left, em.right, em.orientation as f64);
+            edge_proj_coo.push(em.right, em.left, em.orientation as f64);
         }
-        let periodic_projection = dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&proj_coo));
+        let periodic_proj_edge =
+            dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&edge_proj_coo));
+
+        // same for vertices
+        let vert_count = mesh.simplex_count::<0>();
+        let mut vert_proj_coo = dex::nas::CooMatrix::new(vert_count, vert_count);
+        for i in 0..vert_count {
+            vert_proj_coo.push(i, i, 1.);
+        }
+        for &(l, r) in &vertex_map {
+            vert_proj_coo.push(l, r, 1.);
+            vert_proj_coo.push(r, l, 1.);
+        }
+        let periodic_proj_vert =
+            dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&vert_proj_coo));
 
         // interpolation operator with correction at the periodic edges
         // based on the fact that exactly half
         // of the dual volume is on the other side
         // (gmsh keeps triangle shapes consistent)
-        let interp = dex::interpolate::dual_to_primal(&mesh);
+        let interp_dtp = dex::interpolate::dual_to_primal(&mesh);
+        let interp_ptd = dex::interpolate::primal_to_dual(&mesh);
 
         let vert_count = mesh.simplex_count::<0>();
         let dual_vert_count = mesh.simplex_count::<2>();
@@ -303,12 +358,12 @@ impl Setup {
         for &(l, r) in &vertex_map {
             // here we apply the weights of dual vertices on the right
             // to the vertices on the left edge
-            let r_coef_row = interp.mat.row(r);
+            let r_coef_row = interp_dtp.mat.row(r);
             for (r_idx, r_val) in izip!(r_coef_row.col_indices(), r_coef_row.values()) {
                 projected_coefs.push(l, *r_idx, *r_val);
             }
             // ..and vice versa
-            let l_coef_row = interp.mat.row(l);
+            let l_coef_row = interp_dtp.mat.row(l);
             for (l_idx, l_val) in izip!(l_coef_row.col_indices(), l_coef_row.values()) {
                 projected_coefs.push(r, *l_idx, *l_val);
             }
@@ -317,7 +372,7 @@ impl Setup {
         let periodic_interp: dex::MatrixOperator<
             dex::Cochain<0, dex::Dual>,
             dex::Cochain<0, dex::Primal>,
-        > = dex::MatrixOperator::from(interp.mat + projected_coefs);
+        > = dex::MatrixOperator::from(interp_dtp.mat + projected_coefs);
 
         // the previous modification creates doubled weights,
         // correct these with a diagonal matrix
@@ -332,33 +387,73 @@ impl Setup {
         let weight_correction: dex::DiagonalOperator<Interpolated, Interpolated> =
             dex::DiagonalOperator::from(weight_correction);
 
-        let periodic_interp = weight_correction * periodic_interp;
+        let periodic_interp_dtp = weight_correction * periodic_interp;
+
+        // periodic boundary also needs a modified 0-star
+        let mut periodic_star_0 = mesh.star::<0, dex::Primal>();
+        for &(l, r) in &vertex_map {
+            let sum = periodic_star_0.diagonal[l] + periodic_star_0.diagonal[r];
+            periodic_star_0.diagonal[l] = sum;
+            periodic_star_0.diagonal[r] = sum;
+        }
+        // TODO: this could be a method in dexterior
+        let periodic_star_0_inv =
+            dex::DiagonalOperator::from(periodic_star_0.diagonal.map(|e| e.recip()));
+
+        let mut periodic_star_1 = mesh.star::<1, dex::Primal>();
+        for em in &edge_map {
+            let sum = periodic_star_1.diagonal[em.left] + periodic_star_1.diagonal[em.right];
+            periodic_star_1.diagonal[em.left] = sum;
+            periodic_star_1.diagonal[em.right] = sum;
+        }
+        let periodic_star_1_dual =
+            dex::DiagonalOperator::from(-periodic_star_1.diagonal.map(|e| e.recip()));
 
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
+            p_step_interp: -dt
+                * stiffness_scaling.clone()
+                * interp_ptd.clone()
+                * periodic_proj_vert.clone()
+                * periodic_star_0_inv.clone()
+                * mesh.d()
+                * mesh.star(),
             q_step: (dt
-                * periodic_projection.clone()
+                * periodic_proj_edge.clone()
                 * inv_density_scaling.clone()
-                * mesh.star()
+                * periodic_star_1_dual.clone()
                 * mesh.d())
             .exclude_subset(&subsets.top_edges),
-            // the interpolated operators have no effect everywhere except at material boundaries
-            // (and break at the mesh boundary due to truncated dual cells)
-            // so we can safely exclude the rest
-            // (TODO: this isn't actually true, revise this whole idea)
-            q_step_interp: (dt * inv_density_scaling.clone() * mesh.d() * periodic_interp.clone()),
-            w_step: dt * mu_scaling.clone() * mesh.star() * mesh.d(),
-            v_step: dt
-                * periodic_projection.clone()
+            q_step_interp: dt
                 * inv_density_scaling.clone()
-                * mesh.star()
-                * mesh.d(),
-            v_step_interp: (dt * inv_density_scaling.clone() * mesh.d() * periodic_interp.clone()),
+                * mesh.d()
+                * periodic_interp_dtp.clone(),
+            w_step: dt * mu_scaling.clone() * mesh.star() * mesh.d(),
+            w_step_interp: -dt
+                * mu_scaling.clone()
+                * interp_ptd.clone()
+                * periodic_proj_vert.clone()
+                * periodic_star_0_inv.clone()
+                * mesh.d()
+                * mesh.star(),
+            v_step: (dt
+                * periodic_proj_edge.clone()
+                * inv_density_scaling.clone()
+                * periodic_star_1_dual
+                * mesh.d())
+            .exclude_subset(&subsets.top_edges),
+            v_step_interp: dt
+                * inv_density_scaling.clone()
+                * mesh.d()
+                * periodic_interp_dtp.clone(),
             inv_density_scaling,
             mu_scaling,
             stiffness_scaling,
-            periodic_projection,
-            periodic_interp,
+            periodic_proj_edge,
+            periodic_proj_vert,
+            periodic_interp_dtp,
+            periodic_star_0_inv,
+            interp_ptd,
         };
 
         Ok(Self {

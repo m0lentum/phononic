@@ -169,12 +169,16 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
 
         state.p += &setup.ops.p_step * &state.q;
         state.w += &setup.ops.w_step * &state.v;
+        if params.coupled {
+            state.p += &setup.ops.p_step_interp * &state.v;
+            state.w += &setup.ops.w_step_interp * &state.q;
+        }
         state.t += setup.dt;
 
         // sources applied to pressure and shear at the bottom layer
         for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
             state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
-            state.w[tri.dual()] = shear_source(tri.circumcenter(), state.t);
+            // state.w[tri.dual()] = shear_source(tri.circumcenter(), state.t);
         }
 
         // measurements
@@ -240,7 +244,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         .run_animation(dv::Animation {
             mesh: &setup.mesh,
             params: dv::AnimationParams {
-                color_map_range: Some(-1.0..1.0),
+                color_map_range: Some(-0.1..0.1),
                 ..Default::default()
             },
             dt: setup.dt,
@@ -253,11 +257,23 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                     draw.triangle_colors_dual(&state.p);
                 } else {
                     draw.triangle_colors_dual(&state.w);
+                    // debug drawing of one of the problematic interpolated operators
+                    // draw.vertex_colors(
+                    //     &(setup.ops.periodic_proj_vert.clone()
+                    //         * setup.ops.periodic_star_0_inv.clone()
+                    //         * setup.mesh.d()
+                    //         * setup.mesh.star()
+                    //         * &state.q),
+                    // );
                 }
 
                 draw.wireframe(dv::WireframeParams {
                     width: dv::LineWidth::ScreenPixels(1.),
                     ..Default::default()
+                });
+                draw.dual_wireframe(dv::WireframeParams {
+                    width: dv::LineWidth::ScreenPixels(1.),
+                    color: dv::palette::LinSrgb::new(0.02, 0.02, 0.02),
                 });
                 for (idx, layer) in setup.subsets.layers.iter().enumerate() {
                     // layer boundaries with thicker lines

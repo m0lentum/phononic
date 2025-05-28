@@ -8,7 +8,7 @@ edition = "2021"
 # version = 0.3.0
 features = ["visuals"]
 git = "https://github.com/m0lentum/dexterior.git"
-rev = "3829d8f060d2a3a91ef66d8d6435ebaa535c560d"
+rev = "e513a1dc9a6faabeb82295d31b2d32793c697111"
 # path = "../dexterior/crates/dexterior/"
 
 [dependencies]

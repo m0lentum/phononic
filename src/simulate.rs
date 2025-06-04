@@ -11,7 +11,7 @@ use super::Setup;
 pub type Pressure = dex::Cochain<0, dex::Dual>;
 pub type Flux = dex::Cochain<1, dex::Primal>;
 pub type Velocity = dex::Cochain<1, dex::Primal>;
-pub type Shear = dex::Cochain<0, dex::Dual>;
+pub type Shear = dex::Cochain<2, dex::Dual>;
 
 // constants determining when a steady state is deemed to be reached:
 // range of transmitted energy within this number for this many steps
@@ -147,13 +147,8 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
     // step function separated from animation
     // so we can choose between computing with or without visuals
     let step = |state: &mut State| {
-        state.q += &setup.ops.q_step * &state.p;
-        state.v += &setup.ops.v_step * &state.w;
-        // TODO: fix instability caused by the interpolated coupling
-        if params.coupled {
-            state.q += &setup.ops.q_step_interp * &state.w;
-            state.v += &setup.ops.v_step_interp * &state.p;
-        }
+        state.q += &setup.ops.q_step_p * &state.p;
+        state.q += &setup.ops.q_step_w * &state.w;
 
         // absorbing boundary at the top
         let top_layer = setup.subsets.layers.iter().last().unwrap();
@@ -163,16 +158,12 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
             let (orientation, tri) = edge.coboundary().next().unwrap();
             state.q[edge] = -state.p[tri.dual()] * length * orientation as f64
                 / (top_layer.p_wave_speed * top_layer.density);
-            state.v[edge] = -state.w[tri.dual()] * length * orientation as f64
-                / (top_layer.s_wave_speed * top_layer.density);
+            // state.v[edge] = -state.w[tri.dual()] * length * orientation as f64
+            //     / (top_layer.s_wave_speed * top_layer.density);
         }
 
         state.p += &setup.ops.p_step * &state.q;
-        state.w += &setup.ops.w_step * &state.v;
-        if params.coupled {
-            state.p += &setup.ops.p_step_interp * &state.v;
-            state.w += &setup.ops.w_step_interp * &state.q;
-        }
+        state.w += &setup.ops.w_step * &state.q;
         state.t += setup.dt;
 
         // sources applied to pressure and shear at the bottom layer
@@ -187,19 +178,20 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         let pressure_pot_energy = |dv| {
             0.5 * top_layer.stiffness * state.p[dv].powi(2) * dv.dual().volume() / top_layer.density
         };
-        let shear_pot_energy =
-            |dv| 0.5 * top_layer.mu * state.w[dv].powi(2) * dv.dual().volume() / top_layer.density;
+        // let shear_pot_energy =
+        //     |dv| 0.5 * top_layer.mu * state.w[dv].powi(2) * dv.dual().volume() / top_layer.density;
 
         let transmitted_pressure_pot: f64 = setup
             .mesh
             .simplices_in(&setup.subsets.measurement_tris)
             .map(|t| pressure_pot_energy(t.dual()))
             .sum();
-        let transmitted_shear_pot: f64 = setup
-            .mesh
-            .simplices_in(&setup.subsets.measurement_tris)
-            .map(|t| shear_pot_energy(t.dual()))
-            .sum();
+        // let transmitted_shear_pot: f64 = setup
+        //     .mesh
+        //     .simplices_in(&setup.subsets.measurement_tris)
+        //     .map(|t| shear_pot_energy(t.dual()))
+        //     .sum();
+        let transmitted_shear_pot = 0.;
         let transmitted_total = transmitted_pressure_pot + transmitted_shear_pot;
         if state.measurements.transmitted.len() >= timesteps_per_period {
             state.measurements.transmitted.pop_front();
@@ -256,7 +248,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 if state.draw_pressure {
                     draw.triangle_colors_dual(&state.p);
                 } else {
-                    draw.triangle_colors_dual(&state.w);
+                    draw.vertex_colors(&(setup.mesh.star() * &state.w));
                     // debug drawing of one of the problematic interpolated operators
                     // draw.vertex_colors(
                     //     &(setup.ops.periodic_proj_vert.clone()
@@ -316,11 +308,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 );
 
                 if state.draw_arrows {
-                    if state.draw_pressure {
-                        draw.flux_arrows(&state.q, dv::ArrowParams::default());
-                    } else {
-                        draw.velocity_arrows(&state.v, dv::ArrowParams::default());
-                    }
+                    draw.flux_arrows(&state.q, dv::ArrowParams::default());
                 }
 
                 draw.text(dv::TextParams {

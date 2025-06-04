@@ -16,16 +16,9 @@ pub struct Setup {
 
 pub struct Ops {
     pub p_step: dex::Op<Flux, Pressure>,
-    pub p_step_interp: dex::Op<Velocity, Pressure>,
-    pub q_step: dex::Op<Pressure, Flux>,
-    // operators that apply pressure interpolated onto primal vertices
-    // into the shear wave and shear into the pressure wave.
-    // these only have an effect at material boundaries
-    pub q_step_interp: dex::Op<Shear, Flux>,
-    pub w_step: dex::Op<Velocity, Shear>,
-    pub w_step_interp: dex::Op<Velocity, Shear>,
-    pub v_step: dex::Op<Shear, Velocity>,
-    pub v_step_interp: dex::Op<Pressure, Velocity>,
+    pub q_step_p: dex::Op<Pressure, Flux>,
+    pub q_step_w: dex::Op<Shear, Flux>,
+    pub w_step: dex::Op<Flux, Shear>,
     // material scaling operators
     // are useful for looking up material parameters later
     pub mu_scaling: dex::DiagonalOperator<Shear, Shear>,
@@ -70,6 +63,7 @@ pub struct Subsets {
 }
 
 pub struct MaterialArea {
+    pub vertices: dex::Subset<0, dex::Primal>,
     pub edges: dex::Subset<1, dex::Primal>,
     pub tris: dex::Subset<2, dex::Primal>,
     pub boundary: dex::Subset<1, dex::Primal>,
@@ -96,7 +90,8 @@ impl Setup {
         let mut layer = 1;
         loop {
             let group_id = format!("{layer}");
-            let (Some(edges), Some(tris)) = (
+            let (Some(vertices), Some(edges), Some(tris)) = (
+                mesh.get_subset::<0>(&group_id),
                 mesh.get_subset::<1>(&group_id),
                 mesh.get_subset::<2>(&group_id),
             ) else {
@@ -114,6 +109,7 @@ impl Setup {
             let s_wave_speed = f64::sqrt(mu / density);
 
             layers.push(MaterialArea {
+                vertices,
                 edges,
                 tris,
                 boundary,
@@ -241,7 +237,7 @@ impl Setup {
             let l = subsets
                 .layers
                 .iter()
-                .find(|l| l.tris.contains(s.dual()))
+                .find(|l| l.vertices.contains(s.dual()))
                 .unwrap();
             l.mu
         });
@@ -340,6 +336,7 @@ impl Setup {
         }
         let periodic_proj_vert =
             dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&vert_proj_coo));
+        let periodic_proj_dual_2 = dex::MatrixOperator::from(periodic_proj_vert.mat.clone());
 
         // interpolation operator with correction at the periodic edges
         // based on the fact that exactly half
@@ -411,41 +408,17 @@ impl Setup {
 
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
-            p_step_interp: -dt
-                * stiffness_scaling.clone()
-                * interp_ptd.clone()
-                * periodic_proj_vert.clone()
-                * periodic_star_0_inv.clone()
-                * mesh.d()
-                * mesh.star(),
-            q_step: (dt
-                * periodic_proj_edge.clone()
-                * inv_density_scaling.clone()
-                * periodic_star_1_dual.clone()
-                * mesh.d())
-            .exclude_subset(&subsets.top_edges),
-            q_step_interp: -dt
-                * inv_density_scaling.clone()
-                * mesh.d()
-                * periodic_interp_dtp.clone(),
-            w_step: dt * mu_scaling.clone() * mesh.star() * mesh.d(),
-            w_step_interp: dt
-                * mu_scaling.clone()
-                * interp_ptd.clone()
-                * periodic_proj_vert.clone()
-                * periodic_star_0_inv.clone()
-                * mesh.d()
-                * mesh.star(),
-            v_step: (dt
+            w_step: dt * mu_scaling.clone() * periodic_proj_dual_2 * mesh.d() * mesh.star(),
+            q_step_p: dt
                 * periodic_proj_edge.clone()
                 * inv_density_scaling.clone()
                 * periodic_star_1_dual
-                * mesh.d())
-            .exclude_subset(&subsets.top_edges),
-            v_step_interp: dt
+                * mesh.d(),
+            q_step_w: -dt
+                * periodic_proj_edge.clone()
                 * inv_density_scaling.clone()
                 * mesh.d()
-                * periodic_interp_dtp.clone(),
+                * periodic_star_0_inv.clone(),
             inv_density_scaling,
             mu_scaling,
             stiffness_scaling,

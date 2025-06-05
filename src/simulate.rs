@@ -11,7 +11,7 @@ use super::Setup;
 pub type Pressure = dex::Cochain<0, dex::Dual>;
 pub type Flux = dex::Cochain<1, dex::Primal>;
 pub type Velocity = dex::Cochain<1, dex::Primal>;
-pub type Shear = dex::Cochain<2, dex::Dual>;
+pub type Shear = dex::Cochain<0, dex::Primal>;
 
 // constants determining when a steady state is deemed to be reached:
 // range of transmitted energy within this number for this many steps
@@ -45,7 +45,6 @@ pub struct State {
     pub p: Pressure,
     pub q: Flux,
     pub w: Shear,
-    pub v: Velocity,
     pub measurements: MeasurementData,
     // false to draw the shear potential, true to draw pressure
     // (these parameters stored in state to enable keyboard controls
@@ -136,7 +135,6 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         p: setup.mesh.new_zero_cochain(),
         q: setup.mesh.new_zero_cochain(),
         w: setup.mesh.new_zero_cochain(),
-        v: setup.mesh.new_zero_cochain(),
         measurements: MeasurementData::default(),
         draw_pressure: false,
         draw_arrows: false,
@@ -248,7 +246,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 if state.draw_pressure {
                     draw.triangle_colors_dual(&state.p);
                 } else {
-                    draw.vertex_colors(&(setup.mesh.star() * &state.w));
+                    draw.vertex_colors(&state.w);
                     // debug drawing of one of the problematic interpolated operators
                     // draw.vertex_colors(
                     //     &(setup.ops.periodic_proj_vert.clone()

@@ -233,11 +233,11 @@ impl Setup {
             }
             1. / (dens_sum / edge.dual_volume())
         });
-        let mu_scaling = mesh.scaling_dual(|s| {
+        let mu_scaling = mesh.scaling(|vert| {
             let l = subsets
                 .layers
                 .iter()
-                .find(|l| l.vertices.contains(s.dual()))
+                .find(|l| l.vertices.contains(vert))
                 .unwrap();
             l.mu
         });
@@ -336,7 +336,6 @@ impl Setup {
         }
         let periodic_proj_vert =
             dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&vert_proj_coo));
-        let periodic_proj_dual_2 = dex::MatrixOperator::from(periodic_proj_vert.mat.clone());
 
         // interpolation operator with correction at the periodic edges
         // based on the fact that exactly half
@@ -408,17 +407,18 @@ impl Setup {
 
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
-            w_step: dt * mu_scaling.clone() * periodic_proj_dual_2 * mesh.d() * mesh.star(),
+            w_step: dt
+                * mu_scaling.clone()
+                * periodic_proj_vert.clone()
+                * periodic_star_0_inv.clone()
+                * mesh.d()
+                * mesh.star(),
             q_step_p: dt
                 * periodic_proj_edge.clone()
                 * inv_density_scaling.clone()
                 * periodic_star_1_dual
                 * mesh.d(),
-            q_step_w: -dt
-                * periodic_proj_edge.clone()
-                * inv_density_scaling.clone()
-                * mesh.d()
-                * periodic_star_0_inv.clone(),
+            q_step_w: -dt * periodic_proj_edge.clone() * inv_density_scaling.clone() * mesh.d(),
             inv_density_scaling,
             mu_scaling,
             stiffness_scaling,

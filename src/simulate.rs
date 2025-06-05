@@ -244,7 +244,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         .run_animation(dv::Animation {
             mesh: &setup.mesh,
             params: dv::AnimationParams {
-                color_map_range: Some(-0.1..0.1),
+                color_map_range: Some(-1.0..1.0),
                 ..Default::default()
             },
             dt: setup.dt,

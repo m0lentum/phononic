@@ -424,12 +424,12 @@ impl Setup {
                 * periodic_star_1_dual.clone()
                 * mesh.d())
             .exclude_subset(&subsets.top_edges),
-            q_step_interp: dt
+            q_step_interp: -dt
                 * inv_density_scaling.clone()
                 * mesh.d()
                 * periodic_interp_dtp.clone(),
             w_step: dt * mu_scaling.clone() * mesh.star() * mesh.d(),
-            w_step_interp: -dt
+            w_step_interp: dt
                 * mu_scaling.clone()
                 * interp_ptd.clone()
                 * periodic_proj_vert.clone()

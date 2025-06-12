@@ -18,7 +18,9 @@ pub struct Ops {
     pub p_step: dex::Op<Flux, Pressure>,
     pub q_step_p: dex::Op<Pressure, Flux>,
     pub q_step_w: dex::Op<Shear, Flux>,
+    pub p_absorber: dex::Op<Pressure, Flux>,
     pub w_step: dex::Op<Flux, Shear>,
+    pub w_absorber: dex::DiagonalOperator<Shear, Shear>,
     // material scaling operators
     // are useful for looking up material parameters later
     pub mu_scaling: dex::DiagonalOperator<Shear, Shear>,
@@ -413,20 +415,59 @@ impl Setup {
         let periodic_star_1_dual =
             dex::DiagonalOperator::from(-periodic_star_1.diagonal.map(|e| e.recip()));
 
+        //
+        // operators implementing absorbing boundaries for pressure and shear waves
+        //
+
+        let top_layer = subsets.layers.iter().last().unwrap();
+
+        let mut p_absorber_coo =
+            dex::nas::CooMatrix::new(mesh.simplex_count::<1>(), mesh.dual_cell_count::<0>());
+        for edge in mesh.simplices_in(&subsets.top_edges) {
+            let length = edge.volume();
+            // pressure from the adjacent dual vertex
+            let (orientation, tri) = edge.coboundary().next().unwrap();
+            p_absorber_coo.push(
+                edge.index(),
+                tri.index(),
+                -length * orientation as f64 / (top_layer.p_wave_speed * top_layer.density),
+            );
+        }
+        let p_absorber = dex::Op::from(dex::nas::CsrMatrix::from(&p_absorber_coo));
+
+        let mut w_absorber_diag = dex::na::DVector::zeros(mesh.simplex_count::<0>());
+        for vert in mesh.simplices_in(&subsets.top_verts) {
+            // "completing the circulation"
+            // for the dual cell at the boundary
+            let closing_edge_len = 0.5
+                * vert
+                    .coboundary()
+                    .filter(|(_, e)| subsets.top_edges.contains(*e))
+                    .map(|(_, e)| e.volume())
+                    .sum::<f64>();
+            w_absorber_diag[vert.index()] =
+                -dt * closing_edge_len * periodic_star_0_inv[vert] * top_layer.s_wave_speed;
+        }
+        let w_absorber = dex::DiagonalOperator::from(w_absorber_diag);
+
         let ops = Ops {
             p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
+            q_step_p: (dt
+                * periodic_proj_edge.clone()
+                * inv_density_scaling.clone()
+                * periodic_star_1_dual
+                * mesh.d())
+            .exclude_subset(&subsets.top_edges),
+            q_step_w: (-dt * periodic_proj_edge.clone() * inv_density_scaling.clone() * mesh.d())
+                .exclude_subset(&subsets.top_edges),
+            p_absorber,
             w_step: dt
                 * mu_scaling.clone()
                 * periodic_proj_vert.clone()
                 * periodic_star_0_inv.clone()
                 * mesh.d()
                 * mesh.star(),
-            q_step_p: dt
-                * periodic_proj_edge.clone()
-                * inv_density_scaling.clone()
-                * periodic_star_1_dual
-                * mesh.d(),
-            q_step_w: -dt * periodic_proj_edge.clone() * inv_density_scaling.clone() * mesh.d(),
+            w_absorber,
             inv_density_scaling,
             mu_scaling,
             stiffness_scaling,

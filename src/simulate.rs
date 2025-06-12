@@ -147,36 +147,16 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
     let step = |state: &mut State| {
         state.q += &setup.ops.q_step_p * &state.p;
         state.q += &setup.ops.q_step_w * &state.w;
-
         // absorbing boundary for pressure wave
-        let top_layer = setup.subsets.layers.iter().last().unwrap();
+        let absorpt = &setup.ops.p_absorber * &state.p;
         for edge in setup.mesh.simplices_in(&setup.subsets.top_edges) {
-            let length = edge.volume();
-            // pressure from the adjacent dual vertex
-            let (orientation, tri) = edge.coboundary().next().unwrap();
-            state.q[edge] = -state.p[tri.dual()] * length * orientation as f64
-                / (top_layer.p_wave_speed * top_layer.density);
+            state.q[edge] = absorpt[edge];
         }
 
         state.p += &setup.ops.p_step * &state.q;
         state.w += &setup.ops.w_step * &state.q;
-
         // absorbing boundary for shear wave
-        for vert in setup.mesh.simplices_in(&setup.subsets.top_verts) {
-            // "completing the circulation"
-            // for the dual cell at the boundary
-            let closing_edge_len = 0.5
-                * vert
-                    .coboundary()
-                    .filter(|(_, e)| setup.subsets.top_edges.contains(*e))
-                    .map(|(_, e)| e.volume())
-                    .sum::<f64>();
-            state.w[vert] -= setup.dt
-                * closing_edge_len
-                * (1. / vert.dual_volume())
-                * top_layer.s_wave_speed
-                * state.w[vert];
-        }
+        state.w += &setup.ops.w_absorber * &state.w;
 
         state.t += setup.dt;
 
@@ -190,6 +170,8 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
 
         // measurements
 
+        // absorbing boundary for pressure wave
+        let top_layer = setup.subsets.layers.iter().last().unwrap();
         // division by density is to cancel these variables' values being scaled by density
         let pressure_pot_energy = |dv| {
             0.5 * top_layer.stiffness * state.p[dv].powi(2) * dv.dual().volume() / top_layer.density

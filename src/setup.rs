@@ -51,9 +51,11 @@ pub struct Subsets {
     /// region where source terms are applied
     pub source_tris: dex::Subset<2, dex::Primal>,
     pub source_edges: dex::Subset<1, dex::Primal>,
+    pub source_verts: dex::Subset<0, dex::Primal>,
     pub measurement_tris: dex::Subset<2, dex::Primal>,
     pub measurement_edges: dex::Subset<1, dex::Primal>,
     pub top_edges: dex::Subset<1, dex::Primal>,
+    pub top_verts: dex::Subset<0, dex::Primal>,
     // edges along which the domain is periodic
     pub left_edges: dex::Subset<1, dex::Primal>,
     pub left_verts: dex::Subset<0, dex::Primal>,
@@ -168,6 +170,10 @@ impl Setup {
             mesh.simplices_in(&source_tris)
                 .flat_map(|tri| tri.boundary().map(|(_, e)| e)),
         );
+        let source_verts = dex::Subset::from_simplex_iter(
+            mesh.simplices_in(&source_edges)
+                .flat_map(|e| e.boundary().map(|(_, v)| v)),
+        );
         let measurement_tris = dex::Subset::from_predicate(&mesh, |tri| {
             tri.vertex_indices()
                 .any(|idx| top_verts.indices.contains(idx))
@@ -185,6 +191,7 @@ impl Setup {
             layer_boundary_adjacent_dvs,
             bottom_edges,
             top_edges,
+            top_verts,
             left_edges,
             left_verts,
             right_edges,
@@ -192,6 +199,7 @@ impl Setup {
             side_edges,
             source_tris,
             source_edges,
+            source_verts,
             measurement_tris,
             measurement_edges,
         };

@@ -148,7 +148,7 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         state.q += &setup.ops.q_step_p * &state.p;
         state.q += &setup.ops.q_step_w * &state.w;
 
-        // absorbing boundary at the top
+        // absorbing boundary for pressure wave
         let top_layer = setup.subsets.layers.iter().last().unwrap();
         for edge in setup.mesh.simplices_in(&setup.subsets.top_edges) {
             let length = edge.volume();
@@ -156,18 +156,36 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
             let (orientation, tri) = edge.coboundary().next().unwrap();
             state.q[edge] = -state.p[tri.dual()] * length * orientation as f64
                 / (top_layer.p_wave_speed * top_layer.density);
-            // state.v[edge] = -state.w[tri.dual()] * length * orientation as f64
-            //     / (top_layer.s_wave_speed * top_layer.density);
         }
 
         state.p += &setup.ops.p_step * &state.q;
         state.w += &setup.ops.w_step * &state.q;
+
+        // absorbing boundary for shear wave
+        for vert in setup.mesh.simplices_in(&setup.subsets.top_verts) {
+            // "completing the circulation"
+            // for the dual cell at the boundary
+            let closing_edge_len = 0.5
+                * vert
+                    .coboundary()
+                    .filter(|(_, e)| setup.subsets.top_edges.contains(*e))
+                    .map(|(_, e)| e.volume())
+                    .sum::<f64>();
+            state.w[vert] -= setup.dt
+                * closing_edge_len
+                * (1. / vert.dual_volume())
+                * top_layer.s_wave_speed
+                * state.w[vert];
+        }
+
         state.t += setup.dt;
 
         // sources applied to pressure and shear at the bottom layer
         for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
             state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
-            // state.w[tri.dual()] = shear_source(tri.circumcenter(), state.t);
+        }
+        for vert in setup.mesh.simplices_in(&setup.subsets.source_verts) {
+            state.w[vert] = shear_source(vert.vertices().next().unwrap(), state.t);
         }
 
         // measurements

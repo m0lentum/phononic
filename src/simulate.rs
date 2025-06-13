@@ -58,6 +58,26 @@ pub struct MeasurementData {
     /// Average transmitted energies over time,
     /// used to detect when we've reached a steady state
     pub transmitted_averages: Vec<f64>,
+    /// Total potential energies over the past wave period.
+    pub total: VecDeque<f64>,
+}
+
+impl MeasurementData {
+    /// Check if the transmitted energy values haven't changed
+    /// for long enough to be considered converged.
+    pub fn has_converged(&self) -> bool {
+        let itertools::MinMaxResult::MinMax(min, max) = self
+            .transmitted_averages
+            .iter()
+            .rev()
+            .take(STEADY_STATE_STEPS)
+            .minmax()
+        else {
+            return false;
+        };
+
+        max - min < STEADY_STATE_RANGE && *max > 0.1
+    }
 }
 
 /// Final measurements derived from MeasurementData,
@@ -66,12 +86,17 @@ pub struct MeasurementData {
 pub struct Measurements {
     /// Average energy transmitted through the structure over a wave period.
     pub transmitted: f64,
+    /// Average total potential energy in the system over a wave period.
+    pub total: f64,
 }
 
 impl From<&MeasurementData> for Measurements {
     fn from(data: &MeasurementData) -> Self {
         Self {
+            // TODO also compute areas of measurement zones to get energy per unit area,
+            // so we can check against sent energy
             transmitted: data.transmitted.iter().sum::<f64>() / data.transmitted.len() as f64,
+            total: data.total.iter().sum::<f64>() / data.total.len() as f64,
         }
     }
 }
@@ -171,25 +196,37 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         let pressure_pot_energy = |dv| {
             0.5 * top_layer.stiffness * state.p[dv].powi(2) * dv.dual().volume() / top_layer.density
         };
-        // let shear_pot_energy =
-        //     |dv| 0.5 * top_layer.mu * state.w[dv].powi(2) * dv.dual().volume() / top_layer.density;
+        let shear_pot_energy = |vert| {
+            0.5 * top_layer.mu * state.w[vert].powi(2) * vert.dual_volume() / top_layer.density
+        };
 
         let transmitted_pressure_pot: f64 = setup
             .mesh
             .simplices_in(&setup.subsets.measurement_tris)
             .map(|t| pressure_pot_energy(t.dual()))
             .sum();
-        // let transmitted_shear_pot: f64 = setup
-        //     .mesh
-        //     .simplices_in(&setup.subsets.measurement_tris)
-        //     .map(|t| shear_pot_energy(t.dual()))
-        //     .sum();
-        let transmitted_shear_pot = 0.;
-        let transmitted_total = transmitted_pressure_pot + transmitted_shear_pot;
+        // TODO: this isn't right because the energy measurement divides by top layer's density.
+        // Either change the variables to remove density scaling from them
+        // or change the measurement to consider all densities
+        let total_pressure_pot: f64 = setup.mesh.dual_cells::<0>().map(pressure_pot_energy).sum();
+        let transmitted_shear_pot: f64 = setup
+            .mesh
+            .simplices_in(&setup.subsets.measurement_verts)
+            .map(shear_pot_energy)
+            .sum();
+        let total_shear_pot: f64 = setup.mesh.simplices::<0>().map(shear_pot_energy).sum();
+
+        let transmitted_sum = transmitted_pressure_pot + transmitted_shear_pot;
         if state.measurements.transmitted.len() >= timesteps_per_period {
             state.measurements.transmitted.pop_front();
         }
-        state.measurements.transmitted.push_back(transmitted_total);
+        state.measurements.transmitted.push_back(transmitted_sum);
+
+        let total_sum = total_pressure_pot + total_shear_pot;
+        if state.measurements.total.len() >= timesteps_per_period {
+            state.measurements.total.pop_front();
+        }
+        state.measurements.total.push_back(total_sum);
     };
 
     //
@@ -200,19 +237,8 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         let mut state = state;
         for _step in 0..MAX_STEPS {
             step(&mut state);
-            // check for steady state to return early
-
-            if let itertools::MinMaxResult::MinMax(min, max) = state
-                .measurements
-                .transmitted_averages
-                .iter()
-                .rev()
-                .take(STEADY_STATE_STEPS)
-                .minmax()
-            {
-                if max - min < STEADY_STATE_RANGE && *max > 0.1 {
-                    break;
-                }
+            if state.measurements.has_converged() {
+                break;
             }
         }
 
@@ -309,8 +335,16 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 });
 
                 let measurements = Measurements::from(&state.measurements);
+                let conv_text = if state.measurements.has_converged() {
+                    " (converged!)"
+                } else {
+                    ""
+                };
                 draw.text(dv::TextParams {
-                    text: &format!("Transmitted: {:.3}", measurements.transmitted),
+                    text: &format!(
+                        "Total: {:.3}\nTransmitted: {:.3}{}",
+                        measurements.total, measurements.transmitted, conv_text
+                    ),
                     position: dex::Vec2::new(PI / 2., PI),
                     anchor: dv::TextAnchor::BottomLeft,
                     font_size: 24.,

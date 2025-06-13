@@ -136,7 +136,7 @@ impl Setup {
                 .any(|idx| top_verts.indices.contains(idx))
         });
         let measurement_edges = measurement_tris.boundary(&mesh);
-        let measurement_verts = measurement_edges.boundary(&mesh);
+        let measurement_verts = measurement_edges.boundary(&mesh).difference(&top_verts);
 
         let subsets = Subsets {
             layers,

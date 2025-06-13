@@ -2,9 +2,8 @@
 //! (mesh, operators, ...)
 
 use dexterior as dex;
-use itertools::izip;
 
-use super::simulate::{Flux, Pressure, Shear, Velocity};
+use super::simulate::{Flux, Pressure, Shear};
 
 pub struct Setup {
     pub mesh: dex::SimplicialMesh<2>,
@@ -21,35 +20,11 @@ pub struct Ops {
     pub p_absorber: dex::Op<Pressure, Flux>,
     pub w_step: dex::Op<Flux, Shear>,
     pub w_absorber: dex::DiagonalOperator<Shear, Shear>,
-    // material scaling operators
-    // are useful for looking up material parameters later
-    pub mu_scaling: dex::DiagonalOperator<Shear, Shear>,
-    pub stiffness_scaling: dex::DiagonalOperator<Pressure, Pressure>,
-    pub inv_density_scaling: dex::DiagonalOperator<Velocity, Velocity>,
-    // projection matrix that matches the right edge to the left
-    pub periodic_proj_edge: dex::MatrixOperator<Velocity, Velocity>,
-    pub periodic_proj_vert:
-        dex::MatrixOperator<dex::Cochain<0, dex::Primal>, dex::Cochain<0, dex::Primal>>,
-    // interpolation operator that accounts for the periodic boundary condition
-    pub periodic_interp_dtp: dex::MatrixOperator<Pressure, dex::Cochain<0, dex::Primal>>,
-    pub periodic_star_0_inv:
-        dex::DiagonalOperator<dex::Cochain<2, dex::Dual>, dex::Cochain<0, dex::Primal>>,
-    pub interp_ptd: dex::MatrixOperator<dex::Cochain<0, dex::Primal>, Pressure>,
 }
 
 pub struct Subsets {
     /// parts of the mesh made of different materials
     pub layers: Vec<MaterialArea>,
-    /// entire outer boundary of the mesh
-    pub boundary_edges: dex::Subset<1, dex::Primal>,
-    /// boundaries between layers, not including outer boundary
-    pub layer_boundary_edges: dex::Subset<1, dex::Primal>,
-    /// edges and dual vertices of the triangles adjacent to layer boundaries.
-    /// interpolated coupling operators are only applied here,
-    /// as elsewhere they give approximately zero but with some error
-    pub layer_boundary_adjacent_edges: dex::Subset<1, dex::Primal>,
-    pub layer_boundary_adjacent_dvs: dex::Subset<0, dex::Dual>,
-    pub bottom_edges: dex::Subset<1, dex::Primal>,
     /// region where source terms are applied
     pub source_tris: dex::Subset<2, dex::Primal>,
     pub source_edges: dex::Subset<1, dex::Primal>,
@@ -95,7 +70,9 @@ impl Setup {
                 .min_by(f64::total_cmp)
                 .unwrap();
 
-        // spatially varying material parameters from mesh physical groups
+        //
+        // mesh subsets
+        //
 
         let mut layers: Vec<MaterialArea> = Vec::new();
         // loop until no more layers found
@@ -136,8 +113,6 @@ impl Setup {
             layer += 1;
         }
 
-        let boundary_edges = mesh.boundary::<1>();
-        let bottom_edges = mesh.get_subset::<1>("990").expect("Subset not found");
         let bottom_verts = mesh.get_subset::<0>("990").expect("Subset not found");
         let top_edges = mesh.get_subset::<1>("991").expect("Subset not found");
         let top_verts = mesh.get_subset::<0>("991").expect("Subset not found");
@@ -152,25 +127,6 @@ impl Setup {
                 .flat_map(|e| e.boundary().map(|(_, v)| v)),
         );
         let side_edges = right_edges.union(&left_edges);
-
-        let mut layer_boundary_edges = layers[0].boundary.clone();
-        for layer in layers.iter().skip(1) {
-            layer_boundary_edges = layer_boundary_edges.union(&layer.boundary);
-        }
-        layer_boundary_edges = layer_boundary_edges.difference(&boundary_edges);
-        let layer_boundary_verts = dex::Subset::from_simplex_iter(
-            mesh.simplices_in(&layer_boundary_edges)
-                .flat_map(|e| e.boundary().map(|(_, v)| v)),
-        );
-        let layer_boundary_adjacent_dvs = dex::Subset::from_predicate_dual(&mesh, |dv| {
-            dv.dual()
-                .vertex_indices()
-                .any(|vi| layer_boundary_verts.indices.contains(vi))
-        });
-        let layer_boundary_adjacent_edges = dex::Subset::from_simplex_iter(
-            mesh.dual_cells_in(&layer_boundary_adjacent_dvs)
-                .flat_map(|dv| dv.dual().boundary().map(|(_, e)| e)),
-        );
 
         // source terms are applied over a band of triangles along the bottom
         // and measurements performed along a similar band at the top
@@ -197,11 +153,6 @@ impl Setup {
 
         let subsets = Subsets {
             layers,
-            boundary_edges,
-            layer_boundary_edges,
-            layer_boundary_adjacent_edges,
-            layer_boundary_adjacent_dvs,
-            bottom_edges,
             top_edges,
             top_verts,
             left_edges,
@@ -216,9 +167,10 @@ impl Setup {
             measurement_edges,
         };
 
-        // operators
-
+        //
         // spatially varying scaling factors
+        //
+
         let stiffness_scaling = mesh.scaling_dual(|dvert| {
             let l = subsets
                 .layers
@@ -375,54 +327,6 @@ impl Setup {
         let periodic_proj_vert =
             dex::MatrixOperator::from(dex::nas::CsrMatrix::from(&vert_proj_coo));
 
-        // interpolation operator with correction at the periodic edges
-        // based on the fact that exactly half
-        // of the dual volume is on the other side
-        // (gmsh keeps triangle shapes consistent)
-        let interp_dtp = dex::interpolate::dual_to_primal(&mesh);
-        let interp_ptd = dex::interpolate::primal_to_dual(&mesh);
-
-        let vert_count = mesh.simplex_count::<0>();
-        let dual_vert_count = mesh.simplex_count::<2>();
-        // values that will be added to the interpolation matrix
-        // coming from dual volumes on the opposite edge
-        // (these modify the sparsity pattern
-        // so we can't easily do this in place on the original matrix)
-        let mut projected_coefs = dex::nas::CooMatrix::new(vert_count, dual_vert_count);
-        for &(l, r) in &vertex_map {
-            // here we apply the weights of dual vertices on the right
-            // to the vertices on the left edge
-            let r_coef_row = interp_dtp.mat.row(r);
-            for (r_idx, r_val) in izip!(r_coef_row.col_indices(), r_coef_row.values()) {
-                projected_coefs.push(l, *r_idx, *r_val);
-            }
-            // ..and vice versa
-            let l_coef_row = interp_dtp.mat.row(l);
-            for (l_idx, l_val) in izip!(l_coef_row.col_indices(), l_coef_row.values()) {
-                projected_coefs.push(r, *l_idx, *l_val);
-            }
-        }
-        let projected_coefs = dex::nas::CsrMatrix::from(&projected_coefs);
-        let periodic_interp: dex::MatrixOperator<
-            dex::Cochain<0, dex::Dual>,
-            dex::Cochain<0, dex::Primal>,
-        > = dex::MatrixOperator::from(interp_dtp.mat + projected_coefs);
-
-        // the previous modification creates doubled weights,
-        // correct these with a diagonal matrix
-        let mut weight_correction = dex::na::DVector::from_vec(vec![1.; mesh.simplex_count::<0>()]);
-        for vert in mesh
-            .simplices_in(&subsets.left_verts)
-            .chain(mesh.simplices_in(&subsets.right_verts))
-        {
-            weight_correction[vert.index()] = 0.5;
-        }
-        type Interpolated = dex::Cochain<0, dex::Primal>;
-        let weight_correction: dex::DiagonalOperator<Interpolated, Interpolated> =
-            dex::DiagonalOperator::from(weight_correction);
-
-        let periodic_interp_dtp = weight_correction * periodic_interp;
-
         // periodic boundary also needs a modified 0-star
         let mut periodic_star_0 = mesh.star::<0, dex::Primal>();
         for &(l, r) in &vertex_map {
@@ -496,14 +400,6 @@ impl Setup {
                 * mesh.d()
                 * mesh.star(),
             w_absorber,
-            inv_density_scaling,
-            mu_scaling,
-            stiffness_scaling,
-            periodic_proj_edge,
-            periodic_proj_vert,
-            periodic_interp_dtp,
-            periodic_star_0_inv,
-            interp_ptd,
         };
 
         Ok(Self {

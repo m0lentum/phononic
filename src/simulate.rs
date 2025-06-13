@@ -10,7 +10,6 @@ use super::Setup;
 
 pub type Pressure = dex::Cochain<0, dex::Dual>;
 pub type Flux = dex::Cochain<1, dex::Primal>;
-pub type Velocity = dex::Cochain<1, dex::Primal>;
 pub type Shear = dex::Cochain<0, dex::Primal>;
 
 // constants determining when a steady state is deemed to be reached:
@@ -32,10 +31,6 @@ pub struct SimParams {
     pub frequency: f64,
     /// Whether to visualize the simulation.
     pub visualize: bool,
-    /// Whether or not to apply interpolated coupling
-    /// between shear and pressure waves.
-    /// This is mainly for debugging since it doesn't currently work quite right.
-    pub coupled: bool,
 }
 
 /// Varying state within a single simulation.
@@ -247,14 +242,6 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                     draw.triangle_colors_dual(&state.p);
                 } else {
                     draw.vertex_colors(&state.w);
-                    // debug drawing of one of the problematic interpolated operators
-                    // draw.vertex_colors(
-                    //     &(setup.ops.periodic_proj_vert.clone()
-                    //         * setup.ops.periodic_star_0_inv.clone()
-                    //         * setup.mesh.d()
-                    //         * setup.mesh.star()
-                    //         * &state.q),
-                    // );
                 }
 
                 draw.wireframe(dv::WireframeParams {

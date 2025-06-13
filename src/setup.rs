@@ -31,6 +31,7 @@ pub struct Subsets {
     pub source_verts: dex::Subset<0, dex::Primal>,
     pub measurement_tris: dex::Subset<2, dex::Primal>,
     pub measurement_edges: dex::Subset<1, dex::Primal>,
+    pub measurement_verts: dex::Subset<0, dex::Primal>,
     pub top_edges: dex::Subset<1, dex::Primal>,
     pub top_verts: dex::Subset<0, dex::Primal>,
     // edges along which the domain is periodic
@@ -117,15 +118,9 @@ impl Setup {
         let top_edges = mesh.get_subset::<1>("991").expect("Subset not found");
         let top_verts = mesh.get_subset::<0>("991").expect("Subset not found");
         let right_edges = mesh.get_subset::<1>("992").expect("Subset not found");
-        let right_verts = dex::Subset::from_simplex_iter(
-            mesh.simplices_in(&right_edges)
-                .flat_map(|e| e.boundary().map(|(_, v)| v)),
-        );
+        let right_verts = mesh.get_subset::<0>("992").expect("Subset not found");
         let left_edges = mesh.get_subset::<1>("993").expect("Subset not found");
-        let left_verts = dex::Subset::from_simplex_iter(
-            mesh.simplices_in(&left_edges)
-                .flat_map(|e| e.boundary().map(|(_, v)| v)),
-        );
+        let left_verts = mesh.get_subset::<0>("993").expect("Subset not found");
         let side_edges = right_edges.union(&left_edges);
 
         // source terms are applied over a band of triangles along the bottom
@@ -134,22 +129,14 @@ impl Setup {
             tri.vertex_indices()
                 .any(|idx| bottom_verts.indices.contains(idx))
         });
-        let source_edges = dex::Subset::from_simplex_iter(
-            mesh.simplices_in(&source_tris)
-                .flat_map(|tri| tri.boundary().map(|(_, e)| e)),
-        );
-        let source_verts = dex::Subset::from_simplex_iter(
-            mesh.simplices_in(&source_edges)
-                .flat_map(|e| e.boundary().map(|(_, v)| v)),
-        );
+        let source_edges = source_tris.boundary(&mesh);
+        let source_verts = source_edges.boundary(&mesh);
         let measurement_tris = dex::Subset::from_predicate(&mesh, |tri| {
             tri.vertex_indices()
                 .any(|idx| top_verts.indices.contains(idx))
         });
-        let measurement_edges = dex::Subset::from_simplex_iter(
-            mesh.simplices_in(&measurement_tris)
-                .flat_map(|tri| tri.boundary().map(|(_, e)| e)),
-        );
+        let measurement_edges = measurement_tris.boundary(&mesh);
+        let measurement_verts = measurement_edges.boundary(&mesh);
 
         let subsets = Subsets {
             layers,
@@ -165,6 +152,7 @@ impl Setup {
             source_verts,
             measurement_tris,
             measurement_edges,
+            measurement_verts,
         };
 
         //

@@ -85,6 +85,16 @@ impl Setup {
         let msh_bytes = include_bytes!("./meshes/2d_layered.msh");
         let mesh = dex::gmsh::load_trimesh_2d(msh_bytes)?;
 
+        // the coefficient on dt depends on material parameters to an extent,
+        // turn this down if you see instability after modifying those
+
+        let dt = 0.2
+            * mesh
+                .simplices::<1>()
+                .map(|s| s.volume())
+                .min_by(f64::total_cmp)
+                .unwrap();
+
         // spatially varying material parameters from mesh physical groups
 
         let mut layers: Vec<MaterialArea> = Vec::new();
@@ -104,8 +114,8 @@ impl Setup {
 
             let boundary = tris.manifold_boundary(&mesh);
 
-            let lambda = 1.;
-            let mu = 1.;
+            let lambda = 1. + ((layer - 1) % 2) as f64;
+            let mu = 1. - 0.5 * (layer % 2) as f64;
             let density = layer as f64;
             let stiffness = lambda + 2. * mu;
 
@@ -206,23 +216,14 @@ impl Setup {
             measurement_edges,
         };
 
-        // other constant parameters
-
-        let dt = 0.2
-            * mesh
-                .simplices::<1>()
-                .map(|s| s.volume())
-                .min_by(f64::total_cmp)
-                .unwrap();
-
         // operators
 
         // spatially varying scaling factors
-        let stiffness_scaling = mesh.scaling_dual(|s| {
+        let stiffness_scaling = mesh.scaling_dual(|dvert| {
             let l = subsets
                 .layers
                 .iter()
-                .find(|l| l.tris.contains(s.dual()))
+                .find(|l| l.tris.contains(dvert.dual()))
                 .unwrap();
             l.stiffness
         });
@@ -244,12 +245,39 @@ impl Setup {
             1. / (dens_sum / edge.dual_volume())
         });
         let mu_scaling = mesh.scaling(|vert| {
-            let l = subsets
-                .layers
-                .iter()
-                .find(|l| l.vertices.contains(vert))
-                .unwrap();
-            l.mu
+            let vert_pos = vert.vertices().next().unwrap();
+            // similarly here we need to account for how much dual volume
+            // lies on each side of the layer boundary.
+            // do this by summing "elementary dual simplices" corresponding to each edge
+            let mut sum = 0.;
+            let mut weight_sum = 0.;
+            for (_, edge) in vert.coboundary() {
+                for (_, tri) in edge.coboundary() {
+                    let layer = subsets
+                        .layers
+                        .iter()
+                        .find(|l| l.tris.contains(tri))
+                        .unwrap();
+                    let ds_edges = [
+                        tri.circumcenter() - vert_pos,
+                        edge.circumcenter() - vert_pos,
+                    ];
+                    let ds_area =
+                        0.5 * (ds_edges[0].x * ds_edges[1].y - ds_edges[0].y * ds_edges[1].x).abs();
+
+                    sum += layer.mu * ds_area;
+                    weight_sum += ds_area;
+                }
+            }
+            // if this fails it's probably because the mesh isn't well-centered
+            assert!(
+                (weight_sum - vert.dual_volume()).abs() < 1e-6,
+                "Didn't compute dual area correctly for vertex at {}, computed: {}, real: {}",
+                vert_pos,
+                weight_sum,
+                vert.dual_volume(),
+            );
+            sum / weight_sum
         });
 
         // projection implementing periodic domain from right to left.
@@ -462,8 +490,8 @@ impl Setup {
                 .exclude_subset(&subsets.top_edges),
             p_absorber,
             w_step: dt
-                * mu_scaling.clone()
                 * periodic_proj_vert.clone()
+                * mu_scaling.clone()
                 * periodic_star_0_inv.clone()
                 * mesh.d()
                 * mesh.star(),

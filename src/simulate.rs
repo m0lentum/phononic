@@ -29,6 +29,10 @@ pub struct SimParams {
     pub angle: f64,
     /// Frequency of the incoming wave in radians per second.
     pub frequency: f64,
+    /// Whether to apply an incident pressure wave.
+    pub p_source_active: bool,
+    /// Whether to apply an incident shear wave.
+    pub w_source_active: bool,
     /// Whether to visualize the simulation.
     pub visualize: bool,
 }
@@ -181,11 +185,15 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         state.t += setup.dt;
 
         // sources applied to pressure and shear at the bottom layer
-        for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
-            state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
+        if params.p_source_active {
+            for tri in setup.mesh.simplices_in(&setup.subsets.source_tris) {
+                state.p[tri.dual()] = pressure_source(tri.circumcenter(), state.t);
+            }
         }
-        for vert in setup.mesh.simplices_in(&setup.subsets.source_verts) {
-            state.w[vert] = shear_source(vert.vertices().next().unwrap(), state.t);
+        if params.w_source_active {
+            for vert in setup.mesh.simplices_in(&setup.subsets.source_verts) {
+                state.w[vert] = shear_source(vert.vertices().next().unwrap(), state.t);
+            }
         }
 
         // measurements

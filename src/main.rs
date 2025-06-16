@@ -36,6 +36,12 @@ enum Command {
         /// Number of simulations to run with different frequency parameters.
         #[arg(long, default_value_t = 4)]
         freq_resolution: usize,
+        /// Turn off the incident pressure wave.
+        #[arg(long)]
+        no_p: bool,
+        /// Turn off the incident shear wave.
+        #[arg(long)]
+        no_w: bool,
     },
     /// Run only one simulation and visualize it.
     Visualize {
@@ -45,6 +51,12 @@ enum Command {
         /// Frequency of the wave in radians per second.
         #[arg(long, default_value_t = 2.0)]
         frequency: f64,
+        /// Turn off the incident pressure wave.
+        #[arg(long)]
+        no_p: bool,
+        /// Turn off the incident shear wave.
+        #[arg(long)]
+        no_w: bool,
     },
 }
 
@@ -60,6 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             freq_min,
             freq_max,
             freq_resolution,
+            no_p,
+            no_w,
         } => {
             println!(
                 "Running {} simulations on {} threads",
@@ -78,6 +92,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         SimParams {
                             angle,
                             frequency,
+                            p_source_active: !no_p,
+                            w_source_active: !no_w,
                             visualize: false,
                         }
                     })
@@ -89,10 +105,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 dbg!(measurements);
             });
         }
-        Command::Visualize { angle, frequency } => {
+        Command::Visualize {
+            angle,
+            frequency,
+            no_p,
+            no_w,
+        } => {
             let params = SimParams {
                 angle: angle * TAU / 360.,
                 frequency,
+                p_source_active: !no_p,
+                w_source_active: !no_w,
                 visualize: true,
             };
             simulate(params, &setup);

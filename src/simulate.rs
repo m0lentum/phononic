@@ -15,7 +15,7 @@ pub type Shear = dex::Cochain<0, dex::Primal>;
 // constants determining when a steady state is deemed to be reached:
 // range of transmitted energy within this number for this many steps
 const STEADY_STATE_RANGE: f64 = 0.01;
-const STEADY_STATE_STEPS: usize = 50;
+const STEADY_STATE_STEPS: usize = 500;
 
 /// Maximum number of timesteps to simulate,
 /// as a failsafe in case the simulation does not converge
@@ -88,17 +88,16 @@ impl MeasurementData {
 /// returned after reaching a steady state.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Measurements {
-    /// Average energy transmitted through the structure over a wave period.
+    /// Average potential energy density
+    /// at the top edge of the structure over a wave period.
     pub transmitted: f64,
-    /// Average total potential energy in the system over a wave period.
+    /// Average potential energy density in the entire system over a wave period.
     pub total: f64,
 }
 
 impl From<&MeasurementData> for Measurements {
     fn from(data: &MeasurementData) -> Self {
         Self {
-            // TODO also compute areas of measurement zones to get energy per unit area,
-            // so we can check against sent energy
             transmitted: data.transmitted.iter().sum::<f64>() / data.transmitted.len() as f64,
             total: data.total.iter().sum::<f64>() / data.total.len() as f64,
         }
@@ -204,18 +203,30 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         let shear_pot_energy =
             |vert| 0.5 * setup.ops.mu_scaling[vert] * state.w[vert].powi(2) * vert.dual_volume();
 
-        let transmitted_pressure_pot: f64 = setup
+        let transmitted_pressure_pot = setup
             .mesh
             .simplices_in(&setup.subsets.measurement_tris)
             .map(|t| pressure_pot_energy(t.dual()))
-            .sum();
-        let total_pressure_pot: f64 = setup.mesh.dual_cells::<0>().map(pressure_pot_energy).sum();
-        let transmitted_shear_pot: f64 = setup
+            .sum::<f64>()
+            / setup.stats.primal_measurement_area;
+        let total_pressure_pot = setup
+            .mesh
+            .dual_cells::<0>()
+            .map(pressure_pot_energy)
+            .sum::<f64>()
+            / setup.stats.total_mesh_area;
+        let transmitted_shear_pot = setup
             .mesh
             .simplices_in(&setup.subsets.measurement_verts)
             .map(shear_pot_energy)
-            .sum();
-        let total_shear_pot: f64 = setup.mesh.simplices::<0>().map(shear_pot_energy).sum();
+            .sum::<f64>()
+            / setup.stats.dual_measurement_area;
+        let total_shear_pot = setup
+            .mesh
+            .simplices::<0>()
+            .map(shear_pot_energy)
+            .sum::<f64>()
+            / setup.stats.total_mesh_area;
 
         let transmitted_sum = transmitted_pressure_pot + transmitted_shear_pot;
         if state.measurements.transmitted.len() >= timesteps_per_period {
@@ -228,6 +239,10 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
             state.measurements.total.pop_front();
         }
         state.measurements.total.push_back(total_sum);
+
+        // update measurement history
+        let ms = Measurements::from(&state.measurements);
+        state.measurements.transmitted_averages.push(ms.transmitted);
     };
 
     //

@@ -11,6 +11,7 @@ pub struct Setup {
     pub ops: Ops,
     /// Timestep is constant but dependent on minimum mesh edge length
     pub dt: f64,
+    pub stats: Stats,
 }
 
 pub struct Ops {
@@ -59,6 +60,17 @@ pub struct MaterialArea {
     pub stiffness: f64,
     pub p_wave_speed: f64,
     pub s_wave_speed: f64,
+}
+
+/// Measurements about the mesh.
+#[derive(Clone, Copy, Debug)]
+pub struct Stats {
+    /// Total area of triangles used for energy measurement.
+    pub primal_measurement_area: f64,
+    /// Total area of dual cells used for energy measurement.
+    pub dual_measurement_area: f64,
+    /// Area of the entire mesh.
+    pub total_mesh_area: f64,
 }
 
 impl Setup {
@@ -440,11 +452,24 @@ impl Setup {
             inv_density_scaling,
         };
 
+        let stats = Stats {
+            primal_measurement_area: mesh
+                .simplices_in(&subsets.measurement_tris)
+                .map(|tri| tri.volume())
+                .sum(),
+            dual_measurement_area: mesh
+                .simplices_in(&subsets.measurement_verts)
+                .map(|vert| vert.dual_volume())
+                .sum(),
+            total_mesh_area: mesh.simplices::<2>().map(|tri| tri.volume()).sum(),
+        };
+
         Ok(Self {
             mesh,
             subsets,
             ops,
             dt,
+            stats,
         })
     }
 }

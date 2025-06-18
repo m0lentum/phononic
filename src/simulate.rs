@@ -198,24 +198,17 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
 
         // measurements
 
-        // absorbing boundary for pressure wave
-        let top_layer = setup.subsets.layers.iter().last().unwrap();
         // division by density is to cancel these variables' values being scaled by density
-        let pressure_pot_energy = |dv| {
-            0.5 * top_layer.stiffness * state.p[dv].powi(2) * dv.dual().volume() / top_layer.density
-        };
-        let shear_pot_energy = |vert| {
-            0.5 * top_layer.mu * state.w[vert].powi(2) * vert.dual_volume() / top_layer.density
-        };
+        let pressure_pot_energy =
+            |dv| 0.5 * setup.ops.stiffness_scaling[dv] * state.p[dv].powi(2) * dv.dual().volume();
+        let shear_pot_energy =
+            |vert| 0.5 * setup.ops.mu_scaling[vert] * state.w[vert].powi(2) * vert.dual_volume();
 
         let transmitted_pressure_pot: f64 = setup
             .mesh
             .simplices_in(&setup.subsets.measurement_tris)
             .map(|t| pressure_pot_energy(t.dual()))
             .sum();
-        // TODO: this isn't right because the energy measurement divides by top layer's density.
-        // Either change the variables to remove density scaling from them
-        // or change the measurement to consider all densities
         let total_pressure_pot: f64 = setup.mesh.dual_cells::<0>().map(pressure_pot_energy).sum();
         let transmitted_shear_pot: f64 = setup
             .mesh

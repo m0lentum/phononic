@@ -20,6 +20,11 @@ pub struct Ops {
     pub p_absorber: dex::Op<Pressure, Flux>,
     pub w_step: dex::Op<Flux, Shear>,
     pub w_absorber: dex::DiagonalOperator<Shear, Shear>,
+    /// Material scalings are incorporated into the step operators
+    /// but also stored separately for easy lookup of material parameters later
+    pub stiffness_scaling: dex::DiagonalOperator<Pressure, Pressure>,
+    pub mu_scaling: dex::DiagonalOperator<Shear, Shear>,
+    pub inv_density_scaling: dex::DiagonalOperator<Flux, Flux>,
 }
 
 pub struct Subsets {
@@ -167,6 +172,14 @@ impl Setup {
                 .unwrap();
             l.stiffness
         });
+        let p_speed_scaling = mesh.scaling_dual(|dvert| {
+            let l = subsets
+                .layers
+                .iter()
+                .find(|l| l.tris.contains(dvert.dual()))
+                .unwrap();
+            l.p_wave_speed.powi(2)
+        });
         let inv_density_scaling = mesh.scaling(|edge| {
             // for density scaling we must account for dual edges
             // that straddle the line between layers.
@@ -206,6 +219,44 @@ impl Setup {
                         0.5 * (ds_edges[0].x * ds_edges[1].y - ds_edges[0].y * ds_edges[1].x).abs();
 
                     sum += layer.mu * ds_area;
+                    weight_sum += ds_area;
+                }
+            }
+            // if this fails it's probably because the mesh isn't well-centered
+            assert!(
+                (weight_sum - vert.dual_volume()).abs() < 1e-6,
+                "Didn't compute dual area correctly for vertex at {}, computed: {}, real: {}",
+                vert_pos,
+                weight_sum,
+                vert.dual_volume(),
+            );
+            sum / weight_sum
+        });
+        // TODO: this is the exact same code as mu_scaling
+        // except with a different value being summed.
+        // refactor the reduce repetition
+        let s_speed_scaling = mesh.scaling(|vert| {
+            let vert_pos = vert.vertices().next().unwrap();
+            // similarly here we need to account for how much dual volume
+            // lies on each side of the layer boundary.
+            // do this by summing "elementary dual simplices" corresponding to each edge
+            let mut sum = 0.;
+            let mut weight_sum = 0.;
+            for (_, edge) in vert.coboundary() {
+                for (_, tri) in edge.coboundary() {
+                    let layer = subsets
+                        .layers
+                        .iter()
+                        .find(|l| l.tris.contains(tri))
+                        .unwrap();
+                    let ds_edges = [
+                        tri.circumcenter() - vert_pos,
+                        edge.circumcenter() - vert_pos,
+                    ];
+                    let ds_area =
+                        0.5 * (ds_edges[0].x * ds_edges[1].y - ds_edges[0].y * ds_edges[1].x).abs();
+
+                    sum += layer.s_wave_speed.powi(2) * ds_area;
                     weight_sum += ds_area;
                 }
             }
@@ -350,7 +401,7 @@ impl Setup {
             p_absorber_coo.push(
                 edge.index(),
                 tri.index(),
-                -length * orientation as f64 / (top_layer.p_wave_speed * top_layer.density),
+                -length * orientation as f64 / top_layer.p_wave_speed,
             );
         }
         let p_absorber = dex::Op::from(dex::nas::CsrMatrix::from(&p_absorber_coo));
@@ -371,23 +422,22 @@ impl Setup {
         let w_absorber = dex::DiagonalOperator::from(w_absorber_diag);
 
         let ops = Ops {
-            p_step: dt * stiffness_scaling.clone() * mesh.star() * mesh.d(),
-            q_step_p: (dt
-                * periodic_proj_edge.clone()
-                * inv_density_scaling.clone()
-                * periodic_star_1_dual
-                * mesh.d())
-            .exclude_subset(&subsets.top_edges),
-            q_step_w: (-dt * periodic_proj_edge.clone() * inv_density_scaling.clone() * mesh.d())
+            p_step: dt * p_speed_scaling * mesh.star() * mesh.d(),
+            q_step_p: (dt * periodic_proj_edge.clone() * periodic_star_1_dual * mesh.d())
+                .exclude_subset(&subsets.top_edges),
+            q_step_w: (-dt * periodic_proj_edge.clone() * mesh.d())
                 .exclude_subset(&subsets.top_edges),
             p_absorber,
             w_step: dt
                 * periodic_proj_vert.clone()
-                * mu_scaling.clone()
+                * s_speed_scaling
                 * periodic_star_0_inv.clone()
                 * mesh.d()
                 * mesh.star(),
             w_absorber,
+            stiffness_scaling,
+            mu_scaling,
+            inv_density_scaling,
         };
 
         Ok(Self {

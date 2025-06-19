@@ -13,9 +13,10 @@ pub type Flux = dex::Cochain<1, dex::Primal>;
 pub type Shear = dex::Cochain<0, dex::Primal>;
 
 // constants determining when a steady state is deemed to be reached:
-// range of transmitted energy within this number for this many steps
-const STEADY_STATE_RANGE: f64 = 0.01;
-const STEADY_STATE_STEPS: usize = 500;
+// transmitted energy measurements stay within this range
+// for this many wave periods
+const STEADY_STATE_RANGE: f64 = 0.001;
+const STEADY_STATE_PERIODS: usize = 2;
 
 /// Maximum number of timesteps to simulate,
 /// as a failsafe in case the simulation does not converge
@@ -69,12 +70,12 @@ pub struct MeasurementData {
 impl MeasurementData {
     /// Check if the transmitted energy values haven't changed
     /// for long enough to be considered converged.
-    pub fn has_converged(&self) -> bool {
+    pub fn has_converged(&self, step_count: usize) -> bool {
         let itertools::MinMaxResult::MinMax(min, max) = self
             .transmitted_averages
             .iter()
             .rev()
-            .take(STEADY_STATE_STEPS)
+            .take(step_count)
             .minmax()
         else {
             return false;
@@ -253,7 +254,10 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
         let mut state = state;
         for _step in 0..MAX_STEPS {
             step(&mut state);
-            if state.measurements.has_converged() {
+            if state
+                .measurements
+                .has_converged(timesteps_per_period * STEADY_STATE_PERIODS)
+            {
                 break;
             }
         }
@@ -351,7 +355,10 @@ pub fn simulate(params: SimParams, setup: &Setup) -> Measurements {
                 });
 
                 let measurements = Measurements::from(&state.measurements);
-                let conv_text = if state.measurements.has_converged() {
+                let conv_text = if state
+                    .measurements
+                    .has_converged(timesteps_per_period * STEADY_STATE_PERIODS)
+                {
                     " (converged!)"
                 } else {
                     ""
